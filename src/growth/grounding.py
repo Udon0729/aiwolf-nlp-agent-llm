@@ -102,6 +102,24 @@ _ATTENTION = (
 )
 
 
+def build_target_self_exclusion(agent_name: str) -> str:
+    """Build a note forbidding the agent from targeting itself.
+
+    投票・占い・護衛・襲撃の対象に自分を選ばないよう促す注意書きを構築する.
+
+    Args:
+        agent_name (str): The agent's in-game name / ゲーム内のエージェント名
+
+    Returns:
+        str: Self-exclusion note / 自己除外の注意書き
+    """
+    return (
+        "## 対象選択の注意\n"
+        f"- 投票・占い・護衛・襲撃の対象に、あなた自身({agent_name})を選んではならない。"
+        "必ず自分以外の生存者から選ぶこと。"
+    )
+
+
 def build_action_grounding(
     info: Info | None,
     agent_name: str,

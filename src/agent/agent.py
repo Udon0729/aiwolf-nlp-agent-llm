@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 from aiwolf_nlp_common.packet import Info, Packet, Request, Role, Setting, Status, Talk
 
-from growth.grounding import build_action_grounding
+from growth.grounding import build_action_grounding, build_target_self_exclusion
 from growth.skills_loader import load_common_norms, load_role_skill
 from utils.agent_logger import AgentLogger
 from utils.stoppable_thread import StoppableThread
@@ -194,6 +194,36 @@ class Agent:
             return []
         return [k for k, v in self.info.status_map.items() if v == Status.ALIVE]
 
+    def _alive_others(self) -> list[str]:
+        """Get alive agents excluding oneself.
+
+        自分以外の生存エージェントの一覧を取得する.
+
+        Returns:
+            list[str]: Alive agents other than oneself / 自分以外の生存エージェント名のリスト
+        """
+        name = self.info.agent if self.info else self.agent_name
+        return [a for a in self.get_alive_agents() if a != name]
+
+    def _select_target(self) -> str:
+        """Select an action target, never choosing oneself.
+
+        対象選択アクション(投票・占い・護衛・襲撃)の対象を返す. 自分自身は選ばない.
+
+        Returns:
+            str: Target agent name / 対象エージェント名
+        """
+        response = self._send_message_to_llm(self.request)
+        name = self.info.agent if self.info else self.agent_name
+        candidates = self._alive_others() or self.get_alive_agents()
+        if not candidates:
+            return response or ""
+        if not response or response.strip() == name:
+            if response:
+                self.agent_logger.logger.warning("自己を対象に選んだため再選択します: %s", self.request)
+            return random.choice(candidates)  # noqa: S311
+        return response
+
     def on_talk_received(self, talk: Talk) -> None:
         """Called when a new talk is received (freeform mode).
 
@@ -257,6 +287,13 @@ class Agent:
         Request.ATTACK,
         Request.DAILY_FINISH,
     )
+    # 対象(エージェント名)を選ぶリクエスト
+    _TARGET_REQUESTS = (
+        Request.VOTE,
+        Request.DIVINE,
+        Request.GUARD,
+        Request.ATTACK,
+    )
 
     def _apply_growth(self, request: Request | None, prompt: str) -> str:
         """Inject growth-layer context into the rendered prompt.
@@ -280,13 +317,17 @@ class Agent:
             suffix = "\n\n".join(part for part in parts if part)
             return f"{prompt}\n\n{suffix}" if suffix else prompt
         if request in self._ACTION_REQUESTS:
+            name = self.info.agent if self.info else self.agent_name
             prefix = build_action_grounding(
                 self.info,
-                self.info.agent if self.info else self.agent_name,
+                name,
                 self.role,
                 self.talk_history,
                 self.known_results,
             )
+            if request in self._TARGET_REQUESTS:
+                note = build_target_self_exclusion(name)
+                prefix = f"{prefix}\n\n{note}" if prefix else note
             if prefix:
                 return f"{prefix}\n\n---\n\n{prompt}"
         return prompt
@@ -428,9 +469,7 @@ class Agent:
         Returns:
             str: Agent name to divine / 占い対象のエージェント名
         """
-        return self._send_message_to_llm(self.request) or random.choice(  # noqa: S311
-            self.get_alive_agents(),
-        )
+        return self._select_target()
 
     def guard(self) -> str:
         """Return response to guard request.
@@ -440,9 +479,7 @@ class Agent:
         Returns:
             str: Agent name to guard / 護衛対象のエージェント名
         """
-        return self._send_message_to_llm(self.request) or random.choice(  # noqa: S311
-            self.get_alive_agents(),
-        )
+        return self._select_target()
 
     def vote(self) -> str:
         """Return response to vote request.
@@ -452,9 +489,7 @@ class Agent:
         Returns:
             str: Agent name to vote / 投票対象のエージェント名
         """
-        return self._send_message_to_llm(self.request) or random.choice(  # noqa: S311
-            self.get_alive_agents(),
-        )
+        return self._select_target()
 
     def attack(self) -> str:
         """Return response to attack request.
@@ -464,9 +499,7 @@ class Agent:
         Returns:
             str: Agent name to attack / 襲撃対象のエージェント名
         """
-        return self._send_message_to_llm(self.request) or random.choice(  # noqa: S311
-            self.get_alive_agents(),
-        )
+        return self._select_target()
 
     def finish(self) -> None:
         """Perform processing for game finish request.
