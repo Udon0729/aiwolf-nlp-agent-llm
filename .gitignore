@@ -266,4 +266,14 @@ $RECYCLE.BIN/
 
 # End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,macos,windows,python,venv
 
+### プロジェクト固有 ###
+# ローカル設定・認証情報（各環境ごとに作成する）
 config/config.yml
+config/.env
+
+# 対戦ログ・実行時ログ（ゲームごとに生成される）
+/log/
+*_poc.log
+
+# 参考用の母体実装（リポジトリには含めない）
+/hermes-agent

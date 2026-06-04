@@ -27,6 +27,8 @@ if TYPE_CHECKING:
 
 from aiwolf_nlp_common.packet import Info, Packet, Request, Role, Setting, Status, Talk
 
+from growth.grounding import build_action_grounding
+from growth.skills_loader import load_common_norms, load_role_skill
 from utils.agent_logger import AgentLogger
 from utils.stoppable_thread import StoppableThread
 
@@ -77,6 +79,8 @@ class Agent:
         self.sent_whisper_count: int = 0
         self.llm_model: BaseChatModel | None = None
         self.llm_message_history: list[BaseMessage] = []
+        # growth層で参照する、自分が得た占い・霊媒結果のリスト
+        self.known_results: list[str] = []
 
         load_dotenv(Path(__file__).parent.joinpath("./../../config/.env"))
 
@@ -141,6 +145,7 @@ class Agent:
         self.request = packet.request
         if packet.info:
             self.info = packet.info
+            self._record_known_results(packet.info)
         if packet.setting:
             self.setting = packet.setting
         if packet.talk_history:
@@ -160,7 +165,22 @@ class Agent:
             self.talk_history: list[Talk] = []
             self.whisper_history: list[Talk] = []
             self.llm_message_history: list[BaseMessage] = []
+            self.known_results = []
         self.agent_logger.logger.debug(packet)
+
+    def _record_known_results(self, info: Info) -> None:
+        """Accumulate private results (divine/medium) obtained by the agent.
+
+        エージェントが得た占い・霊媒結果を蓄積する.
+
+        Args:
+            info (Info): Game info that may contain results / 結果を含みうるゲーム情報
+        """
+        for label, value in (("占い", info.divine_result), ("霊媒", info.medium_result)):
+            if value is not None:
+                entry = f"{label}: {value}"
+                if entry not in self.known_results:
+                    self.known_results.append(entry)
 
     def get_alive_agents(self) -> list[str]:
         """Get the list of alive agents.
@@ -228,6 +248,49 @@ class Agent:
             send(text)
             await asyncio.sleep(5)
 
+    _ACTION_REQUESTS = (
+        Request.TALK,
+        Request.WHISPER,
+        Request.VOTE,
+        Request.DIVINE,
+        Request.GUARD,
+        Request.ATTACK,
+        Request.DAILY_FINISH,
+    )
+
+    def _apply_growth(self, request: Request | None, prompt: str) -> str:
+        """Inject growth-layer context into the rendered prompt.
+
+        描画済みプロンプトにgrowth層の文脈(規範・戦略skill・接地情報)を注入する.
+
+        INITIALIZE時は共通規範と役職別戦略skillを末尾に付加し, 行動リクエスト時は
+        確定事実・自己スタンス・注意を前置する. 接続層には影響しない.
+
+        Args:
+            request (Request | None): The request type / リクエストタイプ
+            prompt (str): The rendered prompt / 描画済みプロンプト
+
+        Returns:
+            str: The augmented prompt / 拡張後のプロンプト
+        """
+        if request == Request.INITIALIZE:
+            parts = [load_common_norms()]
+            if self.info is not None:
+                parts.append(load_role_skill(self.role.value, len(self.info.status_map)))
+            suffix = "\n\n".join(part for part in parts if part)
+            return f"{prompt}\n\n{suffix}" if suffix else prompt
+        if request in self._ACTION_REQUESTS:
+            prefix = build_action_grounding(
+                self.info,
+                self.info.agent if self.info else self.agent_name,
+                self.role,
+                self.talk_history,
+                self.known_results,
+            )
+            if prefix:
+                return f"{prefix}\n\n---\n\n{prompt}"
+        return prompt
+
     def _send_message_to_llm(self, request: Request | None) -> str | None:
         """Send message to LLM and get response.
 
@@ -257,6 +320,7 @@ class Agent:
         }
         template: Template = Template(prompt)
         prompt = template.render(**key).strip()
+        prompt = self._apply_growth(request, prompt)
         if self.llm_model is None:
             self.agent_logger.logger.error("LLM is not initialized")
             return None
@@ -293,10 +357,13 @@ class Agent:
         model_type = str(self.config["llm"]["type"])
         match model_type:
             case "openai":
+                # base_urlが設定されていればvLLM等のOpenAI互換エンドポイントを使用する
+                base_url = self.config["openai"].get("base_url")
                 self.llm_model = ChatOpenAI(
                     model=str(self.config["openai"]["model"]),
                     temperature=float(self.config["openai"]["temperature"]),
                     api_key=SecretStr(os.environ["OPENAI_API_KEY"]),
+                    base_url=str(base_url) if base_url else None,
                 )
             case "google":
                 self.llm_model = ChatGoogleGenerativeAI(

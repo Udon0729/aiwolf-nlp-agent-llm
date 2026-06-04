@@ -2,45 +2,95 @@
 
 [README in English](/README.en.md)
 
-人狼知能コンテスト（自然言語部門） のLLMを用いたサンプルエージェントです。
+人狼知能コンテスト（自然言語部門）向けの、**自己成長型**の人狼知能エージェントです。
+
+## このプロジェクトの目的
+
+対戦のたびに自らの発話と戦略を見直し、ゲームを重ねるごとに賢くなっていく人狼知能エージェントを開発することを目的としています。公式のサンプルエージェントを土台に、ローカルの大規模言語モデル（vLLM 経由）で動作させ、次の課題に取り組みます。
+
+本大会では、自作のエージェント同士ではなく、参加者それぞれが作ったエージェントが 1 体ずつ接続して対戦します。そのため、相手の発言の巧拙に大きく左右される環境で、安定して筋の通った振る舞いができることが重要になります。初期実装の対戦ログを分析したところ、次の弱点が見られました。
+
+- 役職（占い師・人狼・狂人など）に応じた戦略が乏しく、占い結果を活用しない・人狼が不利な襲撃をするなど、ゲームを動かせていない
+- ゲームの確定情報（生死・追放・襲撃・投票・占い結果）を取りこぼし、起きていない出来事を語るなど発言が事実とずれる
+- 他のプレイヤーの的外れな発言に引きずられ、自分の発言の一貫性を失う
+- 中身のない社交辞令を繰り返し、議論を前に進められない
+
+これらを、対戦を通じて自動的に改善していく仕組みを備えることが本プロジェクトの中心的な狙いです。
+
+## 設計の考え方
+
+ゲームサーバとの接続部分（WebSocket による通信・対戦進行の処理）は公式サンプルのまま変更せず、エージェントの内側に「成長層」を追加する構成をとっています。これにより、大会のレギュレーションに沿った接続方法を一切損なうことなく、発話と戦略の質だけを高められます。
+
+成長層が担う主な要素は次のとおりです。
+
+- **確定情報への接地**: 各ターンの発話・行動の判断を、サーバから与えられる確定情報（生死・追放・襲撃・投票・自分が得た占い結果）に明示的に結びつけ、事実とのずれを防ぐ。
+- **自己スタンスの保持と批判的読解**: 自分のこれまでの主張・役職・得た情報を保持して一貫性を守り、他者の発言を鵜呑みにせず確定情報と照らして判断することで、相手に引きずられにくくする。
+- **役職別の戦略**: 役職とゲーム人数に応じた立ち回りの定石（占い師の宣言と結果開示、人狼の襲撃先選択、狂人のかく乱など）を、参照知識としてエージェントに与える。
+- **対戦後の自己レビュー**: ゲーム終了後に自身の発話を振り返り、改善点を抽出して以降の対戦に反映する自己成長のループ。
 
 ## 環境構築
 
 > [!IMPORTANT]
-> Python 3.11以上が必要です。
-
-### uvを使用する場合
+> Python 3.11 以上が必要です。パッケージ管理・実行には [uv](https://docs.astral.sh/uv/) を使用します。
 
 ```bash
-git clone https://github.com/aiwolfdial/aiwolf-nlp-agent-llm.git
-cd aiwolf-nlp-agent-llm
-cp config/.env.example config/.env
 uv sync
-```
-
-uvを使用する場合、以下の`python src/main.py`などを`uv run src/main.py`と読み替えてください。
-
-### uvを使用しない場合
-
-```bash
-git clone https://github.com/aiwolfdial/aiwolf-nlp-agent-llm.git
-cd aiwolf-nlp-agent-llm
 cp config/.env.example config/.env
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
 ```
 
-### 日本語のプロンプトを使用したい場合
+プロンプトの言語に応じて設定ファイルを用意します。
+
 ```bash
+# 日本語のプロンプトを使用する場合
 cp config/config.jp.yml.example config/config.yml
+
+# 英語のプロンプトを使用する場合
+cp config/config.en.yml.example config/config.yml
 ```
 
-### 英語のプロンプトを使用したい場合
+## ローカル LLM（vLLM）の利用
+
+OpenAI 互換エンドポイントを通じてローカル LLM を利用します。vLLM でモデルを配信し、`config/config.yml` を次のように設定します。
+
+```yaml
+llm:
+  type: openai
+  sleep_time: 0
+
+openai:
+  model: gemma-4-31b-it          # vLLM の served-model-name に合わせる
+  base_url: http://localhost:8000/v1
+  temperature: 0.7
+```
+
+`config/.env` には任意の値で構いません（ローカル LLM では認証は不要なため）。
+
+```
+OPENAI_API_KEY=dummy
+```
+
+## 実行方法
+
+対戦にはゲームサーバ（[aiwolf-nlp-server](https://github.com/aiwolfdial/aiwolf-nlp-server)）が別途必要です。サーバを起動した状態で、エージェントを起動します。
+
 ```bash
-cp config/config.en.yml.example config/config.yml
+uv run src/main.py -c config/config.yml
+```
+
+`config/config.yml` の `agent.num` の人数だけエージェントが起動し、ゲームサーバに接続します。対戦ログは `config/config.yml` の `log.output_dir`（既定では `./log`）以下にエージェントごとに出力されます。
+
+## ディレクトリ構成
+
+```
+src/
+├─ main.py          エージェントの起動（プロセス管理）
+├─ starter.py       ゲームサーバとの接続・対戦セッション処理
+├─ agent/           役職別のエージェント実装
+├─ utils/           ロガーなどの補助
+└─ growth/          成長層（確定情報への接地・自己スタンス・役職別戦略・対戦後レビュー）
+config/             設定ファイルとプロンプト
 ```
 
 ## その他
 
-実行方法や設定などその他については[aiwolf-nlp-agent](https://github.com/aiwolfdial/aiwolf-nlp-agent)をご確認ください。
+実行方法や設定、プロトコルなどの詳細は [aiwolf-nlp-agent](https://github.com/aiwolfdial/aiwolf-nlp-agent) を参照してください。
