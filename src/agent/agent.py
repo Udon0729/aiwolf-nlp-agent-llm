@@ -29,6 +29,7 @@ from aiwolf_nlp_common.packet import Info, Packet, Request, Role, Setting, Statu
 
 from growth.emotion import EmotionDynamics
 from growth.grounding import build_action_grounding, build_target_self_exclusion
+from growth.reading import build_tell_reading
 from growth.skills_loader import load_common_norms, load_role_skill
 from utils.agent_logger import AgentLogger
 from utils.stoppable_thread import StoppableThread
@@ -191,16 +192,19 @@ class Agent:
                 if entry not in self.known_results:
                     self.known_results.append(entry)
 
-    def _emotion_config(self) -> Any:  # noqa: ANN401
-        """Return the growth-layer emotion config section (safe defaults).
+    def _growth_config(self, section: str) -> Any:  # noqa: ANN401
+        """Return a growth-layer config section (safe defaults).
 
-        growth層の感情設定セクションを返す(未設定でも空辞書を返す).
+        growth層の設定セクションを返す(未設定でも空辞書を返す).
+
+        Args:
+            section (str): Section name such as "emotion"/"reading" / セクション名
 
         Returns:
-            Any: Emotion config mapping (supports .get) / 感情設定(.get可能)
+            Any: Config mapping for the section (supports .get) / 設定(.get可能)
         """
         growth: Any = self.config.get("growth", {})
-        return growth.get("emotion", {})
+        return growth.get(section, {})
 
     def _update_emotion(self) -> None:
         """Build and advance the affect dynamics from the current packet.
@@ -210,7 +214,7 @@ class Agent:
         感情機能が無効, または情報が未取得の場合は何もしない. 感情はプロフィールで個体化
         され, ゲーム中の出来事(言及・投票・死亡)で更新される. 接続層には影響しない.
         """
-        if not bool(self._emotion_config().get("enabled", True)):
+        if not bool(self._growth_config("emotion").get("enabled", True)):
             return
         if self.info is None:
             return
@@ -365,8 +369,14 @@ class Agent:
             if request in self._TARGET_REQUESTS:
                 note = build_target_self_exclusion(name)
                 prefix = f"{prefix}\n\n{note}" if prefix else note
+            # 他者の感情のテルを読み役職推定の手がかりにする
+            reads_others = request == Request.TALK or request in self._TARGET_REQUESTS
+            if reads_others and bool(self._growth_config("reading").get("enabled", True)):
+                read_block = build_tell_reading(self.info, name, self.talk_history)
+                if read_block:
+                    prefix = f"{prefix}\n\n{read_block}" if prefix else read_block
             if self.emotion is not None:
-                suppress = bool(self._emotion_config().get("expressive_suppression", False))
+                suppress = bool(self._growth_config("emotion").get("expressive_suppression", False))
                 emotion_block = self.emotion.injection_text(suppress=suppress)
                 prefix = f"{prefix}\n\n{emotion_block}" if prefix else emotion_block
             if prefix:
