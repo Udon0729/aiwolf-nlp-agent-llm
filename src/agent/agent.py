@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
 from aiwolf_nlp_common.packet import Info, Packet, Request, Role, Setting, Status, Talk
 
+from growth.emotion import EmotionDynamics
 from growth.grounding import build_action_grounding, build_target_self_exclusion
 from growth.skills_loader import load_common_norms, load_role_skill
 from utils.agent_logger import AgentLogger
@@ -37,6 +38,10 @@ if TYPE_CHECKING:
 
 P = ParamSpec("P")
 T = TypeVar("T")
+
+# 先頭の初期化文脈を保持しつつメッセージ履歴を剪定する上限
+_MAX_HISTORY_MESSAGES = 12
+_KEEP_HEAD_MESSAGES = 2
 
 
 class Agent:
@@ -81,6 +86,8 @@ class Agent:
         self.llm_message_history: list[BaseMessage] = []
         # growth層で参照する、自分が得た占い・霊媒結果のリスト
         self.known_results: list[str] = []
+        # growth層: 性格(プロフィール)で個体化された感情の力学(ゲーム開始時に構築)
+        self.emotion: EmotionDynamics | None = None
 
         load_dotenv(Path(__file__).parent.joinpath("./../../config/.env"))
 
@@ -166,6 +173,8 @@ class Agent:
             self.whisper_history: list[Talk] = []
             self.llm_message_history: list[BaseMessage] = []
             self.known_results = []
+            self.emotion = None
+        self._update_emotion()
         self.agent_logger.logger.debug(packet)
 
     def _record_known_results(self, info: Info) -> None:
@@ -181,6 +190,34 @@ class Agent:
                 entry = f"{label}: {value}"
                 if entry not in self.known_results:
                     self.known_results.append(entry)
+
+    def _emotion_config(self) -> Any:  # noqa: ANN401
+        """Return the growth-layer emotion config section (safe defaults).
+
+        growth層の感情設定セクションを返す(未設定でも空辞書を返す).
+
+        Returns:
+            Any: Emotion config mapping (supports .get) / 感情設定(.get可能)
+        """
+        growth: Any = self.config.get("growth", {})
+        return growth.get("emotion", {})
+
+    def _update_emotion(self) -> None:
+        """Build and advance the affect dynamics from the current packet.
+
+        現在のパケットから感情の力学を構築・更新する.
+
+        感情機能が無効, または情報が未取得の場合は何もしない. 感情はプロフィールで個体化
+        され, ゲーム中の出来事(言及・投票・死亡)で更新される. 接続層には影響しない.
+        """
+        if not bool(self._emotion_config().get("enabled", True)):
+            return
+        if self.info is None:
+            return
+        if self.emotion is None:
+            self.emotion = EmotionDynamics.from_profile(self.info.profile)
+        name = self.info.agent or self.agent_name
+        self.emotion.update(self.info, self.talk_history, name)
 
     def get_alive_agents(self) -> list[str]:
         """Get the list of alive agents.
@@ -328,9 +365,31 @@ class Agent:
             if request in self._TARGET_REQUESTS:
                 note = build_target_self_exclusion(name)
                 prefix = f"{prefix}\n\n{note}" if prefix else note
+            if self.emotion is not None:
+                suppress = bool(self._emotion_config().get("expressive_suppression", False))
+                emotion_block = self.emotion.injection_text(suppress=suppress)
+                prefix = f"{prefix}\n\n{emotion_block}" if prefix else emotion_block
             if prefix:
                 return f"{prefix}\n\n---\n\n{prompt}"
         return prompt
+
+    def _trim_history(self) -> None:
+        """Trim the LLM message history to bound the prompt context length.
+
+        LLMメッセージ履歴を剪定し, プロンプトのコンテキスト長を抑える.
+
+        先頭のINITIALIZE文脈(共通規範・役職skill)は常に残し, それ以外は直近のみ保持する.
+        確定事実はgrounding層が毎ターン再供給するため, 古い履歴を落としても整合は保たれる.
+        gemmaは user/assistant の厳密な交互を要求するため, tail は HumanMessage 境界
+        (偶数index)から開始させて交互構造を壊さない.
+        """
+        history = self.llm_message_history
+        if len(history) <= _MAX_HISTORY_MESSAGES:
+            return
+        start = len(history) - (_MAX_HISTORY_MESSAGES - _KEEP_HEAD_MESSAGES)
+        if start % 2 != 0:
+            start += 1
+        self.llm_message_history = history[:_KEEP_HEAD_MESSAGES] + history[start:]
 
     def _send_message_to_llm(self, request: Request | None) -> str | None:
         """Send message to LLM and get response.
@@ -367,6 +426,7 @@ class Agent:
             return None
         try:
             self.llm_message_history.append(HumanMessage(content=prompt))
+            self._trim_history()
             response = (self.llm_model | StrOutputParser()).invoke(self.llm_message_history)
             self.llm_message_history.append(AIMessage(content=response))
             self.agent_logger.logger.info(["LLM", prompt, response])
