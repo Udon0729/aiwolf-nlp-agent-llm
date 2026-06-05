@@ -275,5 +275,8 @@ config/.env
 /log/
 *_poc.log
 
+# 自己改善で対局後に学習・蓄積される教訓（実行時に生成される）
+/src/growth/lessons/
+
 # 参考用の母体実装（リポジトリには含めない）
 /hermes-agent

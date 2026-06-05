@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import os
 import random
+import threading
 from pathlib import Path
 from time import sleep
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
@@ -30,6 +31,7 @@ from aiwolf_nlp_common.packet import Info, Packet, Request, Role, Setting, Statu
 from growth.emotion import EmotionDynamics
 from growth.grounding import build_action_grounding, build_target_self_exclusion
 from growth.reading import build_tell_reading
+from growth.review import load_lessons, run_post_game_review
 from growth.skills_loader import load_common_norms, load_role_skill
 from utils.agent_logger import AgentLogger
 from utils.stoppable_thread import StoppableThread
@@ -354,7 +356,10 @@ class Agent:
         if request == Request.INITIALIZE:
             parts = [load_common_norms()]
             if self.info is not None:
-                parts.append(load_role_skill(self.role.value, len(self.info.status_map)))
+                player_count = len(self.info.status_map)
+                parts.append(load_role_skill(self.role.value, player_count))
+                if bool(self._growth_config("review").get("enabled", True)):
+                    parts.append(load_lessons(self.role.value, player_count))
             suffix = "\n\n".join(part for part in parts if part)
             return f"{prompt}\n\n{suffix}" if suffix else prompt
         if request in self._ACTION_REQUESTS:
@@ -575,7 +580,29 @@ class Agent:
         """Perform processing for game finish request.
 
         ゲーム終了リクエストに対する処理を行う.
+
+        終局後の自己レビュー(真値接地の自己改善)をバックグラウンドスレッドで起動する.
+        スレッドは非デーモンのため, プロセスは終了時にレビュー完了を待つ(接続層は無変更).
         """
+        if self.info is None or self.llm_model is None:
+            return
+        if not bool(self._growth_config("review").get("enabled", True)):
+            return
+        role_map = self.info.role_map
+        if not role_map:
+            return
+        name = self.info.agent or self.agent_name
+        thread = threading.Thread(
+            target=run_post_game_review,
+            args=(
+                self.llm_model,
+                self.role.value,
+                name,
+                self.info,
+                self.talk_history,
+            ),
+        )
+        thread.start()
 
     @timeout
     def action(self) -> str | None:  # noqa: C901, PLR0911
