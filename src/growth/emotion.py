@@ -35,6 +35,14 @@ _NEUTRAL_DEVIATION = 0.25
 _STRONG_DEVIATION = 0.5
 # 1回の更新で数える自己への言及数の上限(過大な振れを防ぐ)
 _MAX_MENTIONS_PER_UPDATE = 3
+# 意思決定が拙速・反射的になり始めるとみなす覚醒の下限
+_AROUSAL_ELEVATED = 0.35
+# 構造的な行動上書きが起こりうる覚醒の下限。衝動モードの覚醒に揃える
+_PERTURB_MIN_AROUSAL = 0.35
+# 行動上書き確率の上限
+_PERTURB_MAX_PROB = 0.5
+# 感受性に乗ずる行動上書き確率の利得
+_PERTURB_GAIN = 0.8
 
 
 def _clip(value: float, low: float, high: float) -> float:
@@ -202,12 +210,14 @@ class EmotionDynamics:
         base = traits.baseline
         return cls(traits=traits, state=Vad(base.valence, base.arousal, base.dominance))
 
-    def _stimulus(self, info: Info, talk_history: list[Talk], name: str) -> Vad:
+    def _stimulus(self, info: Info, talk_history: list[Talk], name: str) -> tuple[Vad, bool]:
         """Compute the appraisal stimulus from new events since last update.
 
         前回更新以降の新規イベントから appraisal の刺激ベクトルを計算する.
 
-        自分への言及(疑い・追及の代理), 自分への投票, 新たな死亡(緊張)を契機とする.
+        自分への言及(疑い・追及の代理), 自分への投票, 新たな死亡(緊張)を契機とする. 併せて
+        新規トークを観測したか(時間が進んだか)を返す. 新規イベントの無い空のパケットでは
+        時間を進めず感情を保持するため, この真偽値を用いる.
 
         Args:
             info (Info): Current game info / 現在のゲーム情報
@@ -215,14 +225,16 @@ class EmotionDynamics:
             name (str): The agent's in-game name / ゲーム内のエージェント名
 
         Returns:
-            Vad: Stimulus vector to add this turn / 今ターン加える刺激ベクトル
+            tuple[Vad, bool]: (stimulus, saw_new_talk). 刺激ベクトルと新規トーク観測の有無
         """
         stim = Vad()
 
         mentions = 0
+        saw_new_talk = False
         for talk in talk_history:
             if talk.idx <= self._last_talk_idx:
                 continue
+            saw_new_talk = True
             if talk.agent != name and name and not talk.skip and name in talk.text:
                 mentions += 1
         if talk_history:
@@ -248,7 +260,7 @@ class EmotionDynamics:
             self._seen_death = True
             stim.valence += -0.1
             stim.arousal += 0.1
-        return stim
+        return stim, saw_new_talk
 
     def _advance(self, current: float, base: float, stim: float, low: float, high: float) -> float:
         """Advance one affect axis: retention pull-back plus scaled stimulus.
@@ -284,7 +296,12 @@ class EmotionDynamics:
         """
         if info is None:
             return
-        stim = self._stimulus(info, talk_history, name)
+        stim, saw_new_talk = self._stimulus(info, talk_history, name)
+        has_event = saw_new_talk or stim.valence != 0.0 or stim.arousal != 0.0 or stim.dominance != 0.0
+        if not has_event:
+            # 新規イベントの無い空のパケットでは時間を進めず, 直近の感情を保持する.
+            # 議論直後の投票に, その日の高ぶりが減衰せず持ち越されるようにする.
+            return
         base = self.traits.baseline
         self.state.valence = self._advance(self.state.valence, base.valence, stim.valence, -1.0, 1.0)
         self.state.arousal = self._advance(self.state.arousal, base.arousal, stim.arousal, 0.0, 1.0)
@@ -326,3 +343,45 @@ class EmotionDynamics:
             "- この感情は強く、発言の語調や、誰を疑い誰に投票するかの選択に自然とにじみ出る。\n"
             "- ただし基本的な人物像(プロフィール)は保ったまま、その感情を抱いた人物として発言・行動すること。"
         )
+
+    def decision_gate(self) -> tuple[str, str]:
+        """Classify how the current affect bounds the decision process.
+
+        現在の感情が意思決定の過程をどう束縛するかを分類する(限定合理性のゲーティング).
+
+        高覚醒かつ負の感情価のとき, 支配が高ければ強気の決め打ち, 低ければ拙速で反射的な
+        振る舞いになるとみなす. それ以外は熟慮とみなしゲーティングを掛けない.
+
+        Returns:
+            tuple[str, str]: (mode, level). mode は
+                "deliberate"/"impulsive"/"stubborn", level は
+                "neutral"/"mild"/"strong" / (モード, 強度)
+        """
+        state = self.state
+        deviation = max(abs(state.valence), state.arousal, abs(state.dominance))
+        if deviation < _NEUTRAL_DEVIATION:
+            return "deliberate", "neutral"
+        level = "strong" if deviation >= _STRONG_DEVIATION else "mild"
+        if state.arousal >= _AROUSAL_ELEVATED and state.valence <= _VALENCE_NEG:
+            mode = "stubborn" if state.dominance >= _DOMINANCE_HIGH else "impulsive"
+        else:
+            mode = "deliberate"
+        return mode, level
+
+    def perturb_probability(self) -> float:
+        """Return the probability that affect overrides the deliberated choice.
+
+        熟慮した選択を感情が反射的に上書きする確率を返す(覚醒と感受性に応じて高まる).
+
+        覚醒が下限に満たなければ 0 を返す. 上限で頭打ちにし, 暴走を防ぐ.
+
+        Returns:
+            float: Override probability in the closed range up to the cap /
+                上限までの上書き確率
+        """
+        arousal = self.state.arousal
+        if arousal < _PERTURB_MIN_AROUSAL:
+            return 0.0
+        scaled = (arousal - _PERTURB_MIN_AROUSAL) / (1.0 - _PERTURB_MIN_AROUSAL)
+        prob = _PERTURB_GAIN * self.traits.sensitivity * scaled
+        return _clip(prob, 0.0, _PERTURB_MAX_PROB)

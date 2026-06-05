@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 from aiwolf_nlp_common.packet import Info, Packet, Request, Role, Setting, Status, Talk
 
 from growth.emotion import EmotionDynamics
+from growth.gating import build_decision_gating, impulsive_override, salient_pressurers
 from growth.grounding import build_action_grounding, build_target_self_exclusion
 from growth.reading import build_tell_reading
 from growth.review import load_lessons, run_post_game_review
@@ -265,7 +266,45 @@ class Agent:
             if response:
                 self.agent_logger.logger.warning("自己を対象に選んだため再選択します: %s", self.request)
             return random.choice(candidates)  # noqa: S311
-        return response
+        override = self._gated_override(response, candidates)
+        return override or response
+
+    def _gated_override(self, response: str, candidates: list[str]) -> str | None:
+        """Override the deliberated target reactively under strong agitation.
+
+        強い動揺の下で, 熟慮した対象を反射的な相手へ上書きする(限定合理性の構造的な摂動).
+
+        感情ゲーティングが無効, 感情が衝動モードでない, または上書きが起きなかった場合は
+        None を返す(その場合は熟慮した対象がそのまま使われる).
+
+        Args:
+            response (str): The deliberated target / 熟慮して選んだ対象
+            candidates (list[str]): Allowed target names / 選べる対象名の一覧
+
+        Returns:
+            str | None: The override target, or None / 上書き先. 無ければ None
+        """
+        if self.info is None or self.emotion is None:
+            return None
+        if not bool(self._growth_config("gating").get("enabled", True)):
+            return None
+        mode, level = self.emotion.decision_gate()
+        if mode != "impulsive" or level != "strong":
+            return None
+        prob = self.emotion.perturb_probability()
+        if prob <= 0.0 or random.random() >= prob:  # noqa: S311
+            return None
+        name = self.info.agent or self.agent_name
+        salient = salient_pressurers(self.info, self.talk_history, name, candidates)
+        alt = impulsive_override(salient, response)
+        if alt:
+            self.agent_logger.logger.info(
+                "感情により対象を反射的に上書きしました: %s -> %s (%s)",
+                response,
+                alt,
+                self.request,
+            )
+        return alt
 
     def on_talk_received(self, talk: Talk) -> None:
         """Called when a new talk is received (freeform mode).
@@ -363,30 +402,71 @@ class Agent:
             suffix = "\n\n".join(part for part in parts if part)
             return f"{prompt}\n\n{suffix}" if suffix else prompt
         if request in self._ACTION_REQUESTS:
-            name = self.info.agent if self.info else self.agent_name
-            prefix = build_action_grounding(
-                self.info,
-                name,
-                self.role,
-                self.talk_history,
-                self.known_results,
-            )
-            if request in self._TARGET_REQUESTS:
-                note = build_target_self_exclusion(name)
-                prefix = f"{prefix}\n\n{note}" if prefix else note
-            # 他者の感情のテルを読み役職推定の手がかりにする
-            reads_others = request == Request.TALK or request in self._TARGET_REQUESTS
-            if reads_others and bool(self._growth_config("reading").get("enabled", True)):
-                read_block = build_tell_reading(self.info, name, self.talk_history)
-                if read_block:
-                    prefix = f"{prefix}\n\n{read_block}" if prefix else read_block
-            if self.emotion is not None:
-                suppress = bool(self._growth_config("emotion").get("expressive_suppression", False))
-                emotion_block = self.emotion.injection_text(suppress=suppress)
-                prefix = f"{prefix}\n\n{emotion_block}" if prefix else emotion_block
+            prefix = self._build_action_prefix(request)
             if prefix:
                 return f"{prefix}\n\n---\n\n{prompt}"
         return prompt
+
+    def _build_action_prefix(self, request: Request | None) -> str:
+        """Build the growth-layer prefix prepended to an action prompt.
+
+        行動リクエストのプロンプトに前置するgrowth層の文脈を構築する.
+
+        確定事実の接地, 自己除外の注意, 他者のテル読み, 感情の漏洩・意思決定ゲーティングを
+        この順で組み立てる.
+
+        Args:
+            request (Request | None): The request type / リクエストタイプ
+
+        Returns:
+            str: The prefix block (may be empty) / 前置ブロック(空のこともある)
+        """
+        name = self.info.agent if self.info else self.agent_name
+        prefix = build_action_grounding(
+            self.info,
+            name,
+            self.role,
+            self.talk_history,
+            self.known_results,
+        )
+        if request in self._TARGET_REQUESTS:
+            note = build_target_self_exclusion(name)
+            prefix = f"{prefix}\n\n{note}" if prefix else note
+        # 他者の感情のテルを読み役職推定の手がかりにする
+        reads_others = request == Request.TALK or request in self._TARGET_REQUESTS
+        if reads_others and bool(self._growth_config("reading").get("enabled", True)):
+            read_block = build_tell_reading(self.info, name, self.talk_history)
+            if read_block:
+                prefix = f"{prefix}\n\n{read_block}" if prefix else read_block
+        return self._append_emotion_blocks(prefix, reads_others=reads_others)
+
+    def _append_emotion_blocks(self, prefix: str, *, reads_others: bool) -> str:
+        """Append affect leakage and decision-gating blocks to the prefix.
+
+        感情の漏洩と意思決定ゲーティングのブロックを前置文に付加する.
+
+        感情機能が無効, または感情が平常・熟慮の場合は該当ブロックを足さない.
+
+        Args:
+            prefix (str): The prefix built so far / これまでに組み立てた前置文
+            reads_others (bool): Whether this is a speech or target request /
+                発言または対象選択のリクエストか
+
+        Returns:
+            str: The prefix with affect blocks appended / 感情ブロックを付加した前置文
+        """
+        if self.emotion is None:
+            return prefix
+        suppress = bool(self._growth_config("emotion").get("expressive_suppression", False))
+        emotion_block = self.emotion.injection_text(suppress=suppress)
+        prefix = f"{prefix}\n\n{emotion_block}" if prefix else emotion_block
+        # 感情が意思決定の過程に及ぼす影響(限定合理性のゲーティング)を前置する
+        if reads_others and bool(self._growth_config("gating").get("enabled", True)):
+            mode, level = self.emotion.decision_gate()
+            gating_block = build_decision_gating(mode, level)
+            if gating_block:
+                prefix = f"{prefix}\n\n{gating_block}" if prefix else gating_block
+        return prefix
 
     def _trim_history(self) -> None:
         """Trim the LLM message history to bound the prompt context length.
