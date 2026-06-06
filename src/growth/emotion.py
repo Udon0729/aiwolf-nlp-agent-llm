@@ -83,16 +83,24 @@ class EmotionTraits:
     感情の力学を支配する, 性格(プロフィール)由来のパラメータ.
 
     sensitivity は出来事への感受性(gain), retention は baseline への引き戻しの遅さ
-    (1 に近いほど感情が長く残る), baseline は性格的な平常時の感情点.
+    (1 に近いほど感情が長く残り蓄積する), baseline は性格的な平常時の感情点,
+    suppression は表出抑制の性向(内心では感じても表に出すまいとする).
     """
 
     sensitivity: float = 0.5
     retention: float = 0.6
     baseline: Vad = field(default_factory=Vad)
+    suppression: bool = False
 
 
 # プロフィール文のキーワードから性格係数を導出するための語彙群(ヒューリスティック v0)
-_CALM_WORDS = ("冷静", "落ち着", "沈着", "穏やか", "慎重", "動じ", "我慢", "辛抱")
+# 不動型は動じにくく蓄積もしない。低感受性で減衰が速くフラットに保たれる
+_UNFLAPPABLE_WORDS = ("冷静", "落ち着", "沈着", "泰然", "物静か", "動じ")
+# 溜め型はすぐには反応しないが内に溜め込み、抑えきれず遅れて噴出する。低感受性で減衰が遅く抑制的
+_BOTTLING_WORDS = (
+    "我慢", "辛抱", "忍耐", "こらえ", "寡黙", "口数が少な", "内に秘め",
+    "感情を表に出さ", "感情を表に出すことは少な", "感情を抑え", "感情を出さ",
+)
 _EXCITABLE_WORDS = (
     "短気", "せっかち", "おっちょこちょい", "そそっかし", "心配", "不安",
     "臆病", "慌", "気が小さい", "神経質", "焦",
@@ -120,8 +128,15 @@ def derive_traits(profile: str | None) -> EmotionTraits:
     if not profile:
         return traits
     text = profile
-    if any(word in text for word in _CALM_WORDS):
-        # 冷静な人物は刺激に動じにくく動揺してもすぐ平常へ戻るよう減衰を強める
+    is_bottling = any(word in text for word in _BOTTLING_WORDS)
+    if is_bottling:
+        # 溜め型はすぐには反応しないが内に溜め込み, 表に出すまいと抑える
+        traits.sensitivity -= 0.2
+        traits.retention += 0.3
+        traits.suppression = True
+    elif any(word in text for word in _UNFLAPPABLE_WORDS):
+        # 不動型は刺激に動じにくく動揺してもすぐ平常へ戻るよう減衰を強める.
+        # 溜め型語彙がある場合はそちらを優先し, ここは適用しない
         traits.sensitivity -= 0.3
         traits.retention -= 0.3
     if any(word in text for word in _EXCITABLE_WORDS):
@@ -312,9 +327,12 @@ class EmotionDynamics:
 
         現在の感情を発言・選択ににじませる(あるいは抑制する)プロンプトブロックを構築する.
 
+        表出抑制が有効な場合は強度で振る舞いを変える. 軽微なうちは表に出さず耐え, 抑えきれない
+        ほど強まると, 普段感情を出さない人物の語調の端々に, 溜めていたものが噴き出す.
+
         Args:
             suppress (bool): Whether expressive suppression is active /
-                表出抑制を有効にするか
+                表出抑制を有効にするか(性格由来の抑制とどちらかが真なら抑制する)
 
         Returns:
             str: Prompt block text / プロンプトブロックのテキスト
@@ -322,12 +340,20 @@ class EmotionDynamics:
         phrase, level = _describe(self.state)
         if level == "neutral":
             return f"## あなたの今の感情\n- いまあなたは{phrase}。"
-        if suppress:
+        if suppress or self.traits.suppression:
+            if level == "mild":
+                # 耐えている段階。内心では感じるが表向きは平静を保つ
+                return (
+                    "## あなたの今の感情と自制\n"
+                    f"- いまあなたは内心で{phrase}が、表に出すまいと抑えており、表向きは平静を保っている。\n"
+                    "- 語調はあくまで普段通りに保ち、感情はごくわずかに端ににじむ程度に留めること。"
+                )
+            # 抑えきれず噴出する段階
             return (
-                "## あなたの今の感情と自制\n"
-                f"- いまあなたは内心で{phrase}。\n"
-                "- しかしあなたは、それを表に出すまいと意識的に抑えようとしている(expressive suppression)。\n"
-                "- 表向きは平静を装って発言するが、感情は完全には隠しきれず、語調の端々に漏れることがある。"
+                "## あなたの今の感情と自制の限界\n"
+                f"- いまあなたは内心で{phrase}。普段は感情を表に出さないあなたが、抑えきれなくなっている。\n"
+                "- これまで抑えていたものが、語調の端々や、誰を疑い誰に投票するかの選択に、はっきりと漏れ出す。\n"
+                "- ただし基本的な人物像(プロフィール)は保ったまま、抑えが効かなくなった人物として発言・行動すること。"
             )
         if level == "mild":
             # 軽微な感情はペルソナを上書きしない。語調にわずかに表れる程度に留める

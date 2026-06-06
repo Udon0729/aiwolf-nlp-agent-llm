@@ -214,10 +214,13 @@ class Agent:
 
         現在のパケットから感情の力学を構築・更新する.
 
-        感情機能が無効, または情報が未取得の場合は何もしない. 感情はプロフィールで個体化
-        され, ゲーム中の出来事(言及・投票・死亡)で更新される. 接続層には影響しない.
+        感情の漏洩(emotion)とゲーティング(gating)のどちらかが有効なら状態を更新する. 感情は
+        プロフィールで個体化され, ゲーム中の出来事(言及・投票・死亡)で更新される. ゲーティングは
+        この状態に依存するため, 漏洩を切ってもゲーティングが有効なら状態は保つ. 接続層には影響しない.
         """
-        if not bool(self._growth_config("emotion").get("enabled", True)):
+        emotion_on = bool(self._growth_config("emotion").get("enabled", True))
+        gating_on = bool(self._growth_config("gating").get("enabled", True))
+        if not (emotion_on or gating_on):
             return
         if self.info is None:
             return
@@ -445,7 +448,8 @@ class Agent:
 
         感情の漏洩と意思決定ゲーティングのブロックを前置文に付加する.
 
-        感情機能が無効, または感情が平常・熟慮の場合は該当ブロックを足さない.
+        漏洩(emotion)は語調へのにじみ, ゲーティング(gating)は意思決定の過程への作用で,
+        それぞれ独立に設定で切れる. 感情状態が未構築, または平常・熟慮の場合は足さない.
 
         Args:
             prefix (str): The prefix built so far / これまでに組み立てた前置文
@@ -457,9 +461,11 @@ class Agent:
         """
         if self.emotion is None:
             return prefix
-        suppress = bool(self._growth_config("emotion").get("expressive_suppression", False))
-        emotion_block = self.emotion.injection_text(suppress=suppress)
-        prefix = f"{prefix}\n\n{emotion_block}" if prefix else emotion_block
+        # 感情の漏洩(語調へのにじみ)を前置する
+        if bool(self._growth_config("emotion").get("enabled", True)):
+            suppress = bool(self._growth_config("emotion").get("expressive_suppression", False))
+            emotion_block = self.emotion.injection_text(suppress=suppress)
+            prefix = f"{prefix}\n\n{emotion_block}" if prefix else emotion_block
         # 感情が意思決定の過程に及ぼす影響(限定合理性のゲーティング)を前置する
         if reads_others and bool(self._growth_config("gating").get("enabled", True)):
             mode, level = self.emotion.decision_gate()
