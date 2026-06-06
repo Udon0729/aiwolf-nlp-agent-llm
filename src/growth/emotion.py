@@ -210,18 +210,23 @@ class EmotionDynamics:
     _seen_death: bool = False
 
     @classmethod
-    def from_profile(cls, profile: str | None) -> EmotionDynamics:
+    def from_profile(cls, profile: str | None, sensitivity_scale: float = 1.0) -> EmotionDynamics:
         """Build dynamics initialised to the personality baseline.
 
         性格の baseline に初期化した感情力学を構築する.
 
+        sensitivity_scale は感受性に乗じる全体係数で, トレードオフ曲線を描くために感情の
+        反応の強さを一律に振るのに用いる(1.0 が既定). 0 に近いほど感情は動かなくなる.
+
         Args:
             profile (str | None): The persona profile text / ペルソナのプロフィール文
+            sensitivity_scale (float): Global gain on sensitivity / 感受性への全体係数
 
         Returns:
             EmotionDynamics: Initialised dynamics / 初期化した感情力学
         """
         traits = derive_traits(profile)
+        traits.sensitivity = _clip(traits.sensitivity * sensitivity_scale, 0.0, 1.5)
         base = traits.baseline
         return cls(traits=traits, state=Vad(base.valence, base.arousal, base.dominance))
 

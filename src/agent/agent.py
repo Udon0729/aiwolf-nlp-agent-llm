@@ -225,7 +225,8 @@ class Agent:
         if self.info is None:
             return
         if self.emotion is None:
-            self.emotion = EmotionDynamics.from_profile(self.info.profile)
+            scale = float(self._growth_config("emotion").get("sensitivity_scale", 1.0))
+            self.emotion = EmotionDynamics.from_profile(self.info.profile, sensitivity_scale=scale)
         name = self.info.agent or self.agent_name
         self.emotion.update(self.info, self.talk_history, name)
 

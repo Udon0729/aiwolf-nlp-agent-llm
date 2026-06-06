@@ -41,15 +41,18 @@ _SERVER_JSON_DIR = Path(
 _PROJECT_LOG_DIR = Path(os.environ.get("EVAL_AGENT_LOG_DIR", str(_PROJECT_ROOT / "log")))
 # 並列ワーカーの結果ファイル名の衝突を避けるためのタグ
 _RESULTS_TAG = os.environ.get("EVAL_RESULTS_TAG", "")
+# 感受性スイープ用の全体係数(設定時は emotion.sensitivity_scale に反映)
+_SENSITIVITY_SCALE = os.environ.get("EVAL_SENSITIVITY_SCALE", "")
 # 全条件で対局間学習を無効化する
 _REVIEW_OFF = {"enabled": False}
 
-# leave-one-out の各条件。full から1機能だけ除いた4条件
+# leave-one-out の各条件。full から1機能だけ除いた4条件。emotion_only は感受性スイープ用
 _CONDITIONS: dict[str, dict[str, dict[str, bool]]] = {
     "full": {"emotion": {"enabled": True}, "reading": {"enabled": True}, "gating": {"enabled": True}},
     "no_emotion": {"emotion": {"enabled": False}, "reading": {"enabled": True}, "gating": {"enabled": True}},
     "no_reading": {"emotion": {"enabled": True}, "reading": {"enabled": False}, "gating": {"enabled": True}},
     "no_gating": {"emotion": {"enabled": True}, "reading": {"enabled": True}, "gating": {"enabled": False}},
+    "emotion_only": {"emotion": {"enabled": True}, "reading": {"enabled": False}, "gating": {"enabled": False}},
 }
 
 
@@ -67,12 +70,20 @@ def _write_config(condition: str, growth: dict[str, dict[str, bool]]) -> Path:
     """
     base = yaml.safe_load(_BASE_CONFIG.read_text(encoding="utf-8"))
     base["growth"] = {**growth, "review": dict(_REVIEW_OFF)}
+    # 感受性スイープ: 設定時は emotion セクションに sensitivity_scale を上書きする
+    if _SENSITIVITY_SCALE:
+        emotion = dict(base["growth"].get("emotion", {"enabled": True}))
+        emotion["sensitivity_scale"] = float(_SENSITIVITY_SCALE)
+        base["growth"]["emotion"] = emotion
     # 並列ワーカーごとの接続先・エージェントログ出力先を反映する
     base["web_socket"]["url"] = _WS_URL
     base["openai"]["base_url"] = _VLLM_BASE_URL
     base["log"]["output_dir"] = str(_PROJECT_LOG_DIR)
     _TMP_DIR.mkdir(parents=True, exist_ok=True)
-    path = _TMP_DIR / f"config_{condition}.yml"
+    # 並列ワーカーが同一条件名を使う場合(感受性スイープ等)に config が衝突しないよう
+    # ワーカータグを名前に含める。タグが無ければ条件名のみ。
+    tag = f"_{_RESULTS_TAG}" if _RESULTS_TAG else ""
+    path = _TMP_DIR / f"config_{condition}{tag}.yml"
     path.write_text(yaml.safe_dump(base, allow_unicode=True, sort_keys=False), encoding="utf-8")
     return path
 
