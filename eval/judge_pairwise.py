@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -89,14 +90,45 @@ def _llm(prompt: str, *, max_tokens: int) -> str:
         return ""
 
 
-def _collect(roots: list[Path], per_kind: int) -> list[dict]:
-    """Collect non-neutral action prompts with persona, stratified by type.
+def _prompts_in(text: str, *, neutral: bool) -> list[str]:
+    """Extract logged action prompts whose affect block matches the neutral filter.
 
-    平常でない行動プロンプトを, 性格と類型つきで類型別に集める.
+    記録された行動プロンプトのうち, 感情ブロックが平常/非平常の条件に合うものを取り出す.
+
+    Args:
+        text (str): Full text of one agent log / 1エージェントログの全文
+        neutral (bool): Keep neutral turns instead of non-neutral / 平常ターンを残すか
+
+    Returns:
+        list[str]: Matching prompts / 条件に合うプロンプト
+    """
+    found: list[str] = []
+    for line in text.splitlines():
+        if "'LLM'" not in line or "## あなたの今の感情" not in line:
+            continue
+        try:
+            entry = ast.literal_eval(line[line.find("['LLM'") :])
+        except (ValueError, SyntaxError):
+            continue
+        prompt = entry[1] if len(entry) > 1 else ""
+        block = _EMOTION_BLOCK_RE.search(prompt)
+        if block and (_NEUTRAL in block.group(0)) == neutral:
+            found.append(prompt)
+    return found
+
+
+def _collect(roots: list[Path], per_kind: int, *, neutral: bool = False) -> list[dict]:
+    """Collect action prompts with persona, stratified by type.
+
+    行動プロンプトを, 性格と類型つきで類型別に集める.
+
+    既定では平常でないターンを集める. neutral が真のときは平常のターンのみ集め, 感情ありと
+    感情なしで差が出ないはずの対照群として用いる(自己評価バイアスの切り分け).
 
     Args:
         roots (list[Path]): Roots holding game-log dirs / 対局ログのディレクトリ群
         per_kind (int): Max turns to keep per persona type / 類型ごとの上限
+        neutral (bool): Collect neutral turns as a control / 対照として平常ターンを集めるか
 
     Returns:
         list[dict]: Sampled turn records / 抽出したターン記録
@@ -112,20 +144,8 @@ def _collect(roots: list[Path], per_kind: int) -> list[dict]:
                     continue
                 profile = profile_match.group(1).replace("\\n", "\n")
                 kind = _kind(derive_traits(profile))
-                for line in text.splitlines():
-                    marker = "'LLM'" if "'LLM'" in line else None
-                    if marker is None or "## あなたの今の感情" not in line:
-                        continue
-                    start = line.find("['LLM'")
-                    try:
-                        entry = ast.literal_eval(line[start:])
-                    except (ValueError, SyntaxError):
-                        continue
-                    prompt = entry[1] if len(entry) > 1 else ""
-                    block = _EMOTION_BLOCK_RE.search(prompt)
-                    if not block or _NEUTRAL in block.group(0):
-                        continue
-                    bucket = buckets.setdefault(kind, [])
+                bucket = buckets.setdefault(kind, [])
+                for prompt in _prompts_in(text, neutral=neutral):
                     if len(bucket) < per_kind:
                         bucket.append({"kind": kind, "profile": profile, "prompt": prompt})
     return [rec for bucket in buckets.values() for rec in bucket]
@@ -168,8 +188,10 @@ def main() -> None:
     """
     per_kind = int(sys.argv[1]) if len(sys.argv) > 1 else 12
     roots = [Path(a) for a in sys.argv[2:]] or [Path(f"log_run{i}") for i in range(4)]
-    records = _collect(roots, per_kind)
-    print(f"比較対象ターン: {len(records)} (類型別 上限{per_kind})", flush=True)
+    neutral = bool(os.environ.get("EVAL_NEUTRAL_CONTROL"))
+    records = _collect(roots, per_kind, neutral=neutral)
+    label = "平常ターン対照" if neutral else "非平常ターン"
+    print(f"比較対象ターン: {len(records)} ({label}, 類型別 上限{per_kind})", flush=True)
 
     def run(item: tuple[int, dict]) -> dict | None:
         index, rec = item
