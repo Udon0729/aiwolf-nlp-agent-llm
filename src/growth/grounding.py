@@ -101,6 +101,15 @@ _ATTENTION = (
     "- これまでの自分の主張と矛盾しないこと。"
 )
 
+# 発話(TALK/WHISPER)で口に出す言葉だけを書かせる注意. 名前のみを返す対象選択には付けない
+SPEECH_FORMAT_NOTE = (
+    "## 発話の形式\n"
+    "- これは人間同士が直接会話する場である。出力するのは、実際に口に出して言う言葉だけ。\n"
+    "- 動作・表情・しぐさ・心の声・情景を、括弧書きやト書き(「(…)」「(鼻で笑い)」「(内心では…)」等)"
+    "で書かない。地の文・ナレーション・小説的な描写を一切出力しない。\n"
+    "- 感情や態度は、声に出す言葉そのもの(語調・言葉選び)で表す。"
+)
+
 
 def build_target_self_exclusion(agent_name: str) -> str:
     """Build a note forbidding the agent from targeting itself.

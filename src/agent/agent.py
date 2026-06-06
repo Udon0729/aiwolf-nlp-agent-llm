@@ -30,7 +30,7 @@ from aiwolf_nlp_common.packet import Info, Packet, Request, Role, Setting, Statu
 
 from growth.emotion import EmotionDynamics
 from growth.gating import build_decision_gating, impulsive_override, salient_pressurers
-from growth.grounding import build_action_grounding, build_target_self_exclusion
+from growth.grounding import SPEECH_FORMAT_NOTE, build_action_grounding, build_target_self_exclusion
 from growth.reading import build_tell_reading
 from growth.review import load_lessons, run_post_game_review
 from growth.skills_loader import load_common_norms, load_role_skill
@@ -241,6 +241,22 @@ class Agent:
             return []
         return [k for k, v in self.info.status_map.items() if v == Status.ALIVE]
 
+    def _is_self_dead(self) -> bool:
+        """Return whether this agent has already been killed.
+
+        このエージェントが既に死亡しているかを返す.
+
+        死亡後はサーバから DAILY_INITIALIZE 等が届くが, 発言・思考を生成すべきではない.
+
+        Returns:
+            bool: True if the agent is dead / 死亡していれば True
+        """
+        if self.info is None:
+            return False
+        name = self.info.agent or self.agent_name
+        status = self.info.status_map.get(name)
+        return status is not None and status != Status.ALIVE
+
     def _alive_others(self) -> list[str]:
         """Get alive agents excluding oneself.
 
@@ -435,6 +451,9 @@ class Agent:
         if request in self._TARGET_REQUESTS:
             note = build_target_self_exclusion(name)
             prefix = f"{prefix}\n\n{note}" if prefix else note
+        # 発話(TALK/WHISPER)では口に出す言葉だけを書かせる(対象選択は名前のみ返すので付けない)
+        if request in (Request.TALK, Request.WHISPER):
+            prefix = f"{prefix}\n\n{SPEECH_FORMAT_NOTE}" if prefix else SPEECH_FORMAT_NOTE
         # 他者の感情のテルを読み役職推定の手がかりにする
         reads_others = request == Request.TALK or request in self._TARGET_REQUESTS
         if reads_others and bool(self._growth_config("reading").get("enabled", True)):
@@ -504,6 +523,10 @@ class Agent:
             str | None: LLM response or None if error occurred / LLMの応答またはエラー時はNone
         """
         if request is None:
+            return None
+        # 死亡したエージェントは発言・思考を生成しない(死亡後のDAILY_INITIALIZE等で
+        # 「死亡しており発言できません」のような応答を吐くのを防ぐ)。INITIALIZE時は生存。
+        if request != Request.INITIALIZE and self._is_self_dead():
             return None
         if request.lower() not in self.config["prompt"]:
             return None
