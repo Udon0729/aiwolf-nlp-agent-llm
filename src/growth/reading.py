@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from aiwolf_nlp_common.packet import Info, Talk
 
+from growth import texts
+
 
 def _status_value(status: object) -> str:
     """Return the string value of a status enum (or its str form).
@@ -70,19 +72,14 @@ def build_tell_reading(info: Info | None, agent_name: str, talk_history: list[Ta
     """
     if info is None:
         return ""
+    t = texts.get()
     alive = {k for k, v in info.status_map.items() if _status_value(v) == "ALIVE"}
     latest = _latest_utterances(agent_name, talk_history)
-    lines = [f"  - {name}: 「{text}」" for name, text in latest.items() if name in alive]
+    lines = [
+        t.READING_UTTERANCE_LINE.format(name=name, text=text)
+        for name, text in latest.items()
+        if name in alive
+    ]
     if not lines:
         return ""
-    head = (
-        "## 他者の様子を読む(テルを読む)\n"
-        "- 各生存者の直近の発言を、内容だけでなく感情・態度の面からも読む。"
-        "動揺・焦り・過剰な弁明・話題の回避・不自然な落ち着き・攻撃性などは、"
-        "その人の役職や嘘を示すテル(手がかり)になりうる。\n"
-        "- ただし表れた感情は演技や誤誘導の可能性がある"
-        "(人狼・狂人は平静を装ったり、わざと感情的に振る舞うことがある)。"
-        "テルは手がかりに留め、確定事実と必ず併せて判断する。\n"
-        "- 各生存者の直近の発言:"
-    )
-    return head + "\n" + "\n".join(lines)
+    return t.READING_TELL_HEADER + "\n" + "\n".join(lines)

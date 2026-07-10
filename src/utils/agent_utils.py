@@ -9,19 +9,46 @@ from aiwolf_nlp_common.packet import Packet, Role
 
 from agent.agent import Agent
 from agent.bodyguard import Bodyguard
+from agent.hybrid import HybridAgent
 from agent.medium import Medium
 from agent.possessed import Possessed
 from agent.seer import Seer
+from agent.umwelt import UmweltAgent
 from agent.villager import Villager
 from agent.werewolf import Werewolf
 
-ROLE_TO_AGENT_CLS: dict[Role, type[Agent]] = {
+ROLE_TO_AFFECTIVE_AGENT_CLS: dict[Role, type[Agent]] = {
     Role.WEREWOLF: Werewolf,
     Role.POSSESSED: Possessed,
     Role.SEER: Seer,
     Role.BODYGUARD: Bodyguard,
     Role.VILLAGER: Villager,
     Role.MEDIUM: Medium,
+}
+
+ROLE_TO_UMWELT_AGENT_CLS: dict[Role, type[Agent]] = {
+    Role.WEREWOLF: UmweltAgent,
+    Role.POSSESSED: UmweltAgent,
+    Role.SEER: UmweltAgent,
+    Role.BODYGUARD: UmweltAgent,
+    Role.VILLAGER: UmweltAgent,
+    Role.MEDIUM: UmweltAgent,
+}
+
+ROLE_TO_HYBRID_AGENT_CLS: dict[Role, type[Agent]] = {
+    Role.WEREWOLF: HybridAgent,
+    Role.POSSESSED: HybridAgent,
+    Role.SEER: HybridAgent,
+    Role.BODYGUARD: HybridAgent,
+    Role.VILLAGER: HybridAgent,
+    Role.MEDIUM: HybridAgent,
+}
+
+VARIANT_TO_ROLE_MAP: dict[str, dict[Role, type[Agent]]] = {
+    "affective": ROLE_TO_AFFECTIVE_AGENT_CLS,
+    "default": ROLE_TO_AFFECTIVE_AGENT_CLS,
+    "umwelt": ROLE_TO_UMWELT_AGENT_CLS,
+    "hybrid": ROLE_TO_HYBRID_AGENT_CLS,
 }
 
 
@@ -53,7 +80,11 @@ def init_agent_from_packet(
     role = packet.info.role_map.get(packet.info.agent)
     if not role:
         raise ValueError(packet.info, "Role not found")
-    return ROLE_TO_AGENT_CLS[role](
+    variant = str(config.get("agent", {}).get("variant", "affective"))
+    role_map = VARIANT_TO_ROLE_MAP.get(variant)
+    if role_map is None:
+        raise ValueError(variant, "Unknown agent variant")
+    return role_map[role](
         config=config,
         name=name,
         game_id=packet.info.game_id,

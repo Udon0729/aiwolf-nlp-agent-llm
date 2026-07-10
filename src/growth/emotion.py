@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from aiwolf_nlp_common.packet import Info, Talk
 
+from growth import texts
+
 # describe で用いる感情領域の境界(comparison の magic value を避けるため定数化)
 _AROUSAL_HIGH = 0.5
 _AROUSAL_CALM = 0.4
@@ -94,21 +96,7 @@ class EmotionTraits:
 
 
 # プロフィール文のキーワードから性格係数を導出するための語彙群(ヒューリスティック v0)
-# 不動型は動じにくく蓄積もしない。低感受性で減衰が速くフラットに保たれる
-_UNFLAPPABLE_WORDS = ("冷静", "落ち着", "沈着", "泰然", "物静か", "動じ")
-# 溜め型はすぐには反応しないが内に溜め込み、抑えきれず遅れて噴出する。低感受性で減衰が遅く抑制的
-_BOTTLING_WORDS = (
-    "我慢", "辛抱", "忍耐", "こらえ", "寡黙", "口数が少な", "内に秘め",
-    "感情を表に出さ", "感情を表に出すことは少な", "感情を抑え", "感情を出さ",
-)
-_EXCITABLE_WORDS = (
-    "短気", "せっかち", "おっちょこちょい", "そそっかし", "心配", "不安",
-    "臆病", "慌", "気が小さい", "神経質", "焦",
-)
-_CONFIDENT_WORDS = ("自信", "大胆", "強気", "堂々", "豪胆", "負けず嫌い", "プライド")
-_AGGRESSIVE_WORDS = ("怒", "攻撃的", "好戦", "気が強", "激")
-_CHEERFUL_WORDS = ("明る", "陽気", "楽観", "ポジティブ", "朗らか")
-_GLOOMY_WORDS = ("暗い", "悲観", "ネガティブ", "内向", "陰")
+# 実際の語彙は texts モジュールから言語ごとに取得する。ここでは型ヒント用のダミーを置かない。
 
 
 def derive_traits(profile: str | None) -> EmotionTraits:
@@ -127,30 +115,31 @@ def derive_traits(profile: str | None) -> EmotionTraits:
     traits = EmotionTraits()
     if not profile:
         return traits
+    t = texts.get()
     text = profile
-    is_bottling = any(word in text for word in _BOTTLING_WORDS)
+    is_bottling = any(word in text for word in t.BOTTLING_WORDS)
     if is_bottling:
         # 溜め型はすぐには反応しないが内に溜め込み, 表に出すまいと抑える
         traits.sensitivity -= 0.2
         traits.retention += 0.3
         traits.suppression = True
-    elif any(word in text for word in _UNFLAPPABLE_WORDS):
+    elif any(word in text for word in t.UNFLAPPABLE_WORDS):
         # 不動型は刺激に動じにくく動揺してもすぐ平常へ戻るよう減衰を強める.
         # 溜め型語彙がある場合はそちらを優先し, ここは適用しない
         traits.sensitivity -= 0.3
         traits.retention -= 0.3
-    if any(word in text for word in _EXCITABLE_WORDS):
+    if any(word in text for word in t.EXCITABLE_WORDS):
         traits.sensitivity += 0.3
         traits.retention += 0.25
-    if any(word in text for word in _CONFIDENT_WORDS):
+    if any(word in text for word in t.CONFIDENT_WORDS):
         traits.baseline.dominance += 0.3
         traits.baseline.valence += 0.1
-    if any(word in text for word in _AGGRESSIVE_WORDS):
+    if any(word in text for word in t.AGGRESSIVE_WORDS):
         traits.baseline.dominance += 0.2
         traits.sensitivity += 0.15
-    if any(word in text for word in _CHEERFUL_WORDS):
+    if any(word in text for word in t.CHEERFUL_WORDS):
         traits.baseline.valence += 0.25
-    if any(word in text for word in _GLOOMY_WORDS):
+    if any(word in text for word in t.GLOOMY_WORDS):
         traits.baseline.valence -= 0.25
     traits.sensitivity = _clip(traits.sensitivity, 0.1, 1.0)
     traits.retention = _clip(traits.retention, 0.2, 0.95)
@@ -174,24 +163,25 @@ def _describe(state: Vad) -> tuple[str, str]:
         tuple[str, str]: (phrase, level) with level in
             "neutral"/"mild"/"strong" / (語句, 強度レベル)
     """
+    t = texts.get()
     deviation = max(abs(state.valence), state.arousal, abs(state.dominance))
     if deviation < _NEUTRAL_DEVIATION:
-        return "ほぼ平静で、特段の動揺はない", "neutral"
+        return t.EMOTION_DESCRIBE_NEUTRAL, "neutral"
     level = "strong" if deviation >= _STRONG_DEVIATION else "mild"
-    degree = "強く" if level == "strong" else "やや"
+    degree = t.EMOTION_DEGREE_STRONG if level == "strong" else t.EMOTION_DEGREE_MILD
 
     if state.arousal >= _AROUSAL_HIGH and state.valence <= _VALENCE_NEG:
-        core = "苛立ち・怒りを覚えている" if state.dominance >= _DOMINANCE_HIGH else "焦り・動揺を感じている"
+        core = t.EMOTION_DESCRIBE_ANGER if state.dominance >= _DOMINANCE_HIGH else t.EMOTION_DESCRIBE_ANXIETY
     elif state.dominance >= _DOMINANCE_HIGH and state.valence >= _VALENCE_MILD_POS:
-        core = "落ち着いて自信を保っている" if state.arousal < _AROUSAL_CALM else "強気になっている"
+        core = t.EMOTION_DESCRIBE_CONFIDENT_CALM if state.arousal < _AROUSAL_CALM else t.EMOTION_DESCRIBE_ASSERTIVE
     elif state.valence >= _VALENCE_POS and state.arousal < _AROUSAL_CALM:
-        core = "安心して落ち着いている"
+        core = t.EMOTION_DESCRIBE_RELIEF
     elif state.valence <= _VALENCE_NEG_STRONG and state.arousal < _AROUSAL_CALM:
-        core = "気分が沈み、落ち込んでいる"
+        core = t.EMOTION_DESCRIBE_GLOOMY
     elif state.valence < 0:
-        core = "気がかりを感じている"
+        core = t.EMOTION_DESCRIBE_CONCERN
     else:
-        core = "気持ちが高ぶっている"
+        core = t.EMOTION_DESCRIBE_EXCITED
     return f"{degree}{core}", level
 
 
@@ -210,23 +200,33 @@ class EmotionDynamics:
     _seen_death: bool = False
 
     @classmethod
-    def from_profile(cls, profile: str | None, sensitivity_scale: float = 1.0) -> EmotionDynamics:
+    def from_profile(
+        cls,
+        profile: str | None,
+        sensitivity_scale: float = 1.0,
+        calibration_adj: float = 0.0,
+    ) -> EmotionDynamics:
         """Build dynamics initialised to the personality baseline.
 
         性格の baseline に初期化した感情力学を構築する.
 
         sensitivity_scale は感受性に乗じる全体係数で, トレードオフ曲線を描くために感情の
         反応の強さを一律に振るのに用いる(1.0 が既定). 0 に近いほど感情は動かなくなる.
+        calibration_adj は過去のレビューから累積した較正値で, sensitivity に加算する
+        (A→B較正経路). 正なら「もっと反応せよ」, 負なら「反応を抑えよ」.
 
         Args:
             profile (str | None): The persona profile text / ペルソナのプロフィール文
             sensitivity_scale (float): Global gain on sensitivity / 感受性への全体係数
+            calibration_adj (float): Cumulative review calibration / レビュー由来の累積較正値
 
         Returns:
             EmotionDynamics: Initialised dynamics / 初期化した感情力学
         """
         traits = derive_traits(profile)
-        traits.sensitivity = _clip(traits.sensitivity * sensitivity_scale, 0.0, 1.5)
+        traits.sensitivity = _clip(
+            traits.sensitivity * sensitivity_scale + calibration_adj, 0.0, 1.5,
+        )
         base = traits.baseline
         return cls(traits=traits, state=Vad(base.valence, base.arousal, base.dominance))
 
@@ -342,40 +342,20 @@ class EmotionDynamics:
         Returns:
             str: Prompt block text / プロンプトブロックのテキスト
         """
+        t = texts.get()
         phrase, level = _describe(self.state)
         if level == "neutral":
-            return f"## あなたの今の感情\n- いまあなたは{phrase}。"
+            return t.EMOTION_INJECT_NEUTRAL.format(phrase=phrase)
         if suppress or self.traits.suppression:
             if level == "mild":
                 # 耐えている段階。内心では感じるが表向きは平静を保つ
-                return (
-                    "## あなたの今の感情と自制\n"
-                    f"- いまあなたは内心で{phrase}が、表に出すまいと抑えており、表向きは平静を保っている。\n"
-                    "- 語調はあくまで普段通りに保ち、感情はごくわずかに端ににじむ程度に留めること。"
-                )
+                return t.EMOTION_INJECT_SUPPRESSED_MILD.format(phrase=phrase)
             # 抑えきれず噴出する段階
-            return (
-                "## あなたの今の感情と自制の限界\n"
-                f"- いまあなたは内心で{phrase}。普段は感情を表に出さないあなたが、抑えきれなくなっている。\n"
-                "- これまで抑えていたものが、語調の端々や、誰を疑い誰に投票するかの選択に、はっきりと漏れ出す。\n"
-                "- 基本的な人物像(プロフィール)は保ったまま、抑えが効かなくなった人物として話すこと。"
-                "感情は声に出す言葉と語調だけで表し、しぐさや心情を括弧書きで描写しない。"
-            )
+            return t.EMOTION_INJECT_SUPPRESSED_STRONG.format(phrase=phrase)
         if level == "mild":
             # 軽微な感情はペルソナを上書きしない。語調にわずかに表れる程度に留める
-            return (
-                "## あなたの今の感情\n"
-                f"- いまあなたは{phrase}。\n"
-                "- この気配は、あなたの性格(プロフィール)の範囲内で語調にわずかに表れる程度でよい。"
-                "感情に飲まれて人物像から外れた言動をしないこと。"
-            )
-        return (
-            "## あなたの今の感情(発言・選択ににじみ出る)\n"
-            f"- いまあなたは{phrase}。\n"
-            "- この感情は強く、発言の語調や、誰を疑い誰に投票するかの選択に自然とにじみ出る。\n"
-            "- 基本的な人物像(プロフィール)は保ったまま、その感情を抱いた人物として話すこと。"
-            "感情は声に出す言葉と語調だけで表し、しぐさや心情を括弧書きで描写しない。"
-        )
+            return t.EMOTION_INJECT_MILD.format(phrase=phrase)
+        return t.EMOTION_INJECT_STRONG.format(phrase=phrase)
 
     def decision_gate(self) -> tuple[str, str]:
         """Classify how the current affect bounds the decision process.
@@ -418,3 +398,30 @@ class EmotionDynamics:
         scaled = (arousal - _PERTURB_MIN_AROUSAL) / (1.0 - _PERTURB_MIN_AROUSAL)
         prob = _PERTURB_GAIN * self.traits.sensitivity * scaled
         return _clip(prob, 0.0, _PERTURB_MAX_PROB)
+
+
+_WOLF_ROLES = {"WEREWOLF"}
+_POSSESSED_ROLES = {"POSSESSED"}
+
+
+def build_strategic_control(role_value: str) -> str:
+    """Build the prompt block for role-driven active emotional regulation.
+
+    役職に応じた能動的な感情制御のプロンプトブロックを構築する.
+
+    人狼は正体を隠すために感情を意識的に抑制し, 狂人は撹乱のために感情を道具として使い,
+    村人陣営は自然な表出で誠実さを伝える. 性格由来の抑制(suppression)とは独立した,
+    戦略的動機に基づく制御である.
+
+    Args:
+        role_value (str): The agent's role value / 自分の役職の値
+
+    Returns:
+        str: Prompt block, or empty string / プロンプトブロック. 該当なしなら空文字列
+    """
+    t = texts.get()
+    if role_value in _WOLF_ROLES:
+        return t.STRATEGIC_CONTROL_WOLF
+    if role_value in _POSSESSED_ROLES:
+        return t.STRATEGIC_CONTROL_POSSESSED
+    return t.STRATEGIC_CONTROL_VILLAGE

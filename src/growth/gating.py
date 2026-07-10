@@ -15,36 +15,16 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from aiwolf_nlp_common.packet import Info, Talk
 
+from growth import texts
+
 # 直近の圧力源を拾うために遡るトーク数
 _RECENT_TALK_WINDOW = 12
 
-_IMPULSIVE_STRONG = (
-    "## 今の感情による意思決定への影響\n"
-    "- いまあなたは強く動揺・焦りを感じており、じっくり考える前に拙速に結論へ飛びつきやすい。\n"
-    "- 直前に自分を疑った相手・責めた相手へ反射的に矛先を向けがちで、長期的な筋読みより目先の感情で動く。\n"
-    "- 一度決めかけても土壇場で揺れることがある。ただし基本的な人物像(プロフィール)は保つこと。"
-)
-_IMPULSIVE_MILD = (
-    "## 今の感情による意思決定への影響\n"
-    "- やや動揺・焦りがあり、考えがまとまりきらず、目先の出来事に判断が引っ張られやすい。\n"
-    "- この影響は性格(プロフィール)の範囲内に留め、人物像から外れた言動はしないこと。"
-)
-_STUBBORN_STRONG = (
-    "## 今の感情による意思決定への影響\n"
-    "- いまあなたは強い苛立ちを覚えており、自分の見立てに固執して強気に決め打ちしがちである。\n"
-    "- 反対意見や新しい情報を軽んじ、いったん疑った相手を押し通そうとする。ただし人物像(プロフィール)は保つこと。"
-)
-_STUBBORN_MILD = (
-    "## 今の感情による意思決定への影響\n"
-    "- やや強気になっており、自分の見立てに寄りがちである。\n"
-    "- この影響は性格(プロフィール)の範囲内に留めること。"
-)
-
-_GATING_TEXT = {
-    ("impulsive", "strong"): _IMPULSIVE_STRONG,
-    ("impulsive", "mild"): _IMPULSIVE_MILD,
-    ("stubborn", "strong"): _STUBBORN_STRONG,
-    ("stubborn", "mild"): _STUBBORN_MILD,
+_GATING_KEYS = {
+    ("impulsive", "strong"): "GATING_IMPULSIVE_STRONG",
+    ("impulsive", "mild"): "GATING_IMPULSIVE_MILD",
+    ("stubborn", "strong"): "GATING_STUBBORN_STRONG",
+    ("stubborn", "mild"): "GATING_STUBBORN_MILD",
 }
 
 
@@ -62,7 +42,10 @@ def build_decision_gating(mode: str, level: str) -> str:
     Returns:
         str: Prompt block text, or empty string / プロンプトブロック. 無ければ空文字列
     """
-    return _GATING_TEXT.get((mode, level), "")
+    key = _GATING_KEYS.get((mode, level))
+    if key is None:
+        return ""
+    return getattr(texts.get(), key, "")
 
 
 def salient_pressurers(
