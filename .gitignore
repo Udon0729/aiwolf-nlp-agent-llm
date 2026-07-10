@@ -273,10 +273,16 @@ config/.env
 
 # 対戦ログ・実行時ログ（ゲームごとに生成される）
 /log/
+/log_*/
 *_poc.log
+vllm_*.log
 
 # 自己改善で対局後に学習・蓄積される教訓（実行時に生成される）
 /src/growth/lessons/
+
+# 定量評価の実行時生成物（一時config・結果JSON）
+/eval/_tmp/
+/eval/results/
 
 # 参考用の母体実装（リポジトリには含めない）
 /hermes-agent

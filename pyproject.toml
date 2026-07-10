@@ -51,3 +51,7 @@ docstring-code-format = true
 select = ["ALL"]
 unfixable = ["F401", "F841"]
 pydocstyle.convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# eval は分析用のCLIツール。標準出力への印字を許可する
+"eval/**" = ["T201", "INP001"]
