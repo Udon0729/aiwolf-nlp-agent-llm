@@ -35,15 +35,18 @@ from growth.emotion import EmotionDynamics, build_strategic_control
 from growth.game_model import build_rule_model_block
 from growth.gating import build_decision_gating, impulsive_override, salient_pressurers
 from growth.grounding import (
+    REPEAT_MIN_COUNT,
     build_action_grounding,
     build_divine_guide,
     build_guard_guide,
     build_medium_guide,
+    build_repetition_guard,
     build_seer_priority,
     build_seer_priority_claimants,
     build_target_self_exclusion,
     build_voice_note,
     build_werewolf_attack_guide,
+    find_repeated_phrase,
     get_speech_format_note,
 )
 from growth.reading import build_tell_reading
@@ -65,6 +68,7 @@ _KEEP_HEAD_MESSAGES = 2
 _SPEECH_PARENTHETICAL_RE = re.compile(r"\([^()\n]{0,120}\)|\uFF08[^\uFF08\uFF09\n]{0,120}\uFF09")
 _SPEECH_EMOTE_RE = re.compile(r"[*\uFF0A][^*\uFF0A\n]{1,80}[*\uFF0A]")
 _SPEECH_ELLIPSIS_RE = re.compile(r"(?:…+|‥+|\.{3,}|(?:・\s*){3,}|･{3,})")
+_SPEECH_DOUBLE_PERIOD_RE = re.compile(r"\.{2,}")
 _SPEECH_OVER_ONLY_RE = re.compile(r"\s*over\s*[。.!\uFF01]?\s*", re.IGNORECASE)
 _SPEECH_OVER_TOKEN_RE = re.compile(r"(?<![A-Za-z])Over(?![A-Za-z])", re.IGNORECASE)
 _SPEECH_SPACES_RE = re.compile(r"[ \t　]{2,}")
@@ -672,6 +676,11 @@ class Agent:
             voice_note = build_voice_note(self.info.profile if self.info else None)
             if voice_note:
                 prefix = f"{prefix}\n\n{voice_note}"
+            # 自分の既出フレーズの反復を機械的に検出し、再利用しないよう注意する
+            if bool(self._growth_config("repetition_guard").get("enabled", True)):
+                repetition_note = build_repetition_guard(name, self.talk_history + self.whisper_history)
+                if repetition_note:
+                    prefix = f"{prefix}\n\n{repetition_note}"
             # 発話時にSTEER(誘導)・PERSONA(ペルソナ)教訓を注入する
             if bool(self._growth_config("review").get("enabled", True)):
                 player_count = len(self.info.status_map) if self.info else None
@@ -775,6 +784,9 @@ class Agent:
 
         text = text.translate(_SPEECH_REMOVE_CHARS)
         text = _SPEECH_ELLIPSIS_RE.sub("", text)
+        # 3個以上のピリオドは上のellipsis正規表現で既に除去済み。ちょうど2個だけ残る
+        # 二重ピリオド(モデルの生成揺れ)を単一のピリオドに畳む。
+        text = _SPEECH_DOUBLE_PERIOD_RE.sub(".", text)
         text = _SPEECH_OVER_TOKEN_RE.sub("", text)
         text = text.replace("\r", " ").replace("\n", " ")
         text = text.replace(",", " ")  # 半角カンマは規約で禁止。決定的に空白へ置換して保証する
@@ -813,6 +825,32 @@ class Agent:
             self.agent_logger.logger.exception("Failed to refine speech")
             return draft
         return refined.strip() or draft
+
+    def _rewrite_repeated_phrase(self, draft: str, phrase: str) -> str:
+        """Force a rewrite when the draft reuses one of the agent's own overused phrases.
+
+        下書きが自分の既出フレーズを再利用している場合, 書き直しを強制する.
+        プロンプトでの注意喚起だけでは遵守が保証されないため, 実際に検出された場合に
+        機械的にこの書き直しパスを発動する(ADR-011).
+
+        Args:
+            draft (str): Draft utterance that reused the phrase / フレーズを再利用した下書き
+            phrase (str): The overused phrase detected / 検出された既出フレーズ
+
+        Returns:
+            str: Rewritten utterance, or the draft unchanged on failure /
+                書き直した発話. 失敗時は下書きをそのまま返す
+        """
+        if self.llm_model is None:
+            return draft
+        t = _growth_texts.get()
+        prompt = t.REPETITION_REWRITE_TMPL.format(count=REPEAT_MIN_COUNT, phrase=phrase, draft=draft)
+        try:
+            rewritten = (self.llm_model | StrOutputParser()).invoke([HumanMessage(content=prompt)])
+        except Exception:
+            self.agent_logger.logger.exception("Failed to rewrite repeated phrase")
+            return draft
+        return rewritten.strip() or draft
 
     def _speech_char_budget(self) -> int:
         """Return the server's per-utterance character budget (spaces excluded).
@@ -854,6 +892,14 @@ class Agent:
             if refined != response:
                 self.agent_logger.logger.info(["SPEECH_REFINED", response, refined])
                 response = refined
+        if bool(self._growth_config("repetition_guard").get("enabled", True)):
+            own_name = self.info.agent if self.info else self.agent_name
+            phrase = find_repeated_phrase(own_name, self.talk_history + self.whisper_history, response)
+            if phrase:
+                rewritten = self._rewrite_repeated_phrase(response, phrase)
+                if rewritten != response:
+                    self.agent_logger.logger.info(["SPEECH_DEREPEATED", response, rewritten, phrase])
+                    response = rewritten
         sanitized = self._sanitize_speech_response(response, self._speech_char_budget())
         if sanitized != response:
             self.agent_logger.logger.info(["SPEECH_SANITIZED", response, sanitized])

@@ -389,6 +389,21 @@ REFINE_SPEECH_TMPL = (
 
 
 # ---------------------------------------------------------------------------
+# agent.py — forced rewrite prompt for _rewrite_repeated_phrase()
+# ---------------------------------------------------------------------------
+
+REPETITION_REWRITE_TMPL = (
+    "You are the player about to speak in a Werewolf game. The draft utterance below reuses "
+    'a construction you have already used {count} or more times this game: "{phrase}". '
+    "Repeating the same phrasing turn after turn reads as a stock catchphrase, not natural speech.\n\n"
+    "[Draft utterance]\n{draft}\n\n"
+    "Rewrite it to make the exact same point (same target, same claim, same vote if any) "
+    'without using "{phrase}" or its sentence structure. Change the wording, not the substance. '
+    "Output only the rewritten utterance, with no explanation or preamble."
+)
+
+
+# ---------------------------------------------------------------------------
 # grounding.py — build_target_self_exclusion()
 # ---------------------------------------------------------------------------
 
@@ -396,6 +411,17 @@ GROUNDING_TARGET_SELF_EXCLUSION = (
     "## Target selection\n"
     "- You must not target yourself ({agent_name}) when voting, diving, guarding, or attacking. "
     "Always choose from other surviving players."
+)
+
+# ---------------------------------------------------------------------------
+# grounding.py — build_repetition_guard()
+# ---------------------------------------------------------------------------
+
+GROUNDING_REPETITION_GUARD = (
+    "## Avoid your own overused phrases\n"
+    "You have already used these constructions multiple times this game: {phrases}. "
+    "Do not reuse any of them verbatim or in the same sentence structure this turn — "
+    "make the same point with genuinely different wording."
 )
 
 
@@ -526,7 +552,10 @@ REVIEW_PROMPT_TEMPLATE = (
     "{role_focus}\n\n"
     "## Output format\n"
     "Write exactly 3 lessons as bullet points (one per line). "
-    "You MUST include at least one [SELF] and at least one [STEER]. "
+    "You MUST include exactly one [SELF], one [STEER], and one [PERSONA] — one lesson of each kind, "
+    "not three of the same kind. Persona-reflection lessons are just as important as strategic ones; "
+    "do not skip [PERSONA] even if the game gave you little to say about it — reflect on how well you "
+    "kept your persona's voice under pressure, or how you could have voiced a claim or vote more in character.\n"
     "Do NOT use player names in the lesson text — generalise to roles or positions "
     "(e.g. 'the first Seer claimant' not 'Victoria').\n"
     "Each lesson MUST start with one of these tags:\n"

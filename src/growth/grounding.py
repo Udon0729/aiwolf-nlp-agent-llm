@@ -161,6 +161,109 @@ def build_voice_note(profile: str | None) -> str:
     return "\n".join(lines)
 
 
+_REPEAT_NGRAM_SIZES = (2, 3)
+REPEAT_MIN_COUNT = 2
+_REPEAT_MAX_LISTED = 5
+_REPEAT_WORD_RE = re.compile(r"[a-zA-Z']+")
+# 文法上必須で反復扱いすべきでない機能語のみのbigram
+_REPEAT_STOP_NGRAMS = frozenset({
+    "is a", "is the", "to the", "of the", "in the", "and the", "on the",
+    "at the", "for the", "with the", "that is", "this is", "it is",
+    "i am", "you are", "we are", "i will", "do not", "did not",
+})
+_REPEAT_CHAR_NGRAM_SIZE = 6  # 日本語(単語境界なし)用の文字n-gram長
+
+
+def _own_ngram_counts(agent_name: str, talk_history: list[Talk]) -> dict[str, int]:
+    """Count word/char n-grams across the agent's own past utterances this game.
+
+    このゲーム内で自分自身が過去に発した発話から, 単語(英語)または文字(日本語)の
+    n-gramの出現回数を数える. 決まり文句の機械的な検出に使う.
+    """
+    counts: dict[str, int] = {}
+    use_chars = texts.get_language() != "en"
+    for talk in talk_history:
+        if talk.agent != agent_name or talk.skip or not talk.text:
+            continue
+        if use_chars:
+            body = re.sub(r"\s+", "", talk.text)
+            n = _REPEAT_CHAR_NGRAM_SIZE
+            grams = (body[i : i + n] for i in range(len(body) - n + 1))
+            for gram in grams:
+                counts[gram] = counts.get(gram, 0) + 1
+            continue
+        words = _REPEAT_WORD_RE.findall(talk.text.lower())
+        for n in _REPEAT_NGRAM_SIZES:
+            for i in range(len(words) - n + 1):
+                gram = " ".join(words[i : i + n])
+                if gram in _REPEAT_STOP_NGRAMS:
+                    continue
+                counts[gram] = counts.get(gram, 0) + 1
+    return counts
+
+
+def find_repeated_phrase(agent_name: str, talk_history: list[Talk], draft: str) -> str | None:
+    """Return an own-phrase the draft reuses at or above the repeat threshold, if any.
+
+    下書きが, 自分の既出フレーズを閾値以上再利用していないか調べる. 見つかれば
+    最長一致のフレーズを返し, 強制的な書き直しのトリガーに使う.
+
+    Args:
+        agent_name (str): The agent's in-game name / ゲーム内のエージェント名
+        talk_history (list[Talk]): Full talk history / 発話履歴全体
+        draft (str): Draft utterance to check / 検査対象の下書き発話
+
+    Returns:
+        str | None: The overused phrase, or None if no repeat found /
+            既出の反復フレーズ. 無ければNone
+    """
+    counts = _own_ngram_counts(agent_name, talk_history)
+    if not counts:
+        return None
+    use_chars = texts.get_language() != "en"
+    if use_chars:
+        body = re.sub(r"\s+", "", draft)
+        n = _REPEAT_CHAR_NGRAM_SIZE
+        for i in range(len(body) - n + 1):
+            gram = body[i : i + n]
+            if counts.get(gram, 0) >= REPEAT_MIN_COUNT:
+                return gram
+        return None
+    words = _REPEAT_WORD_RE.findall(draft.lower())
+    for n in sorted(_REPEAT_NGRAM_SIZES, reverse=True):
+        for i in range(len(words) - n + 1):
+            gram = " ".join(words[i : i + n])
+            if counts.get(gram, 0) >= REPEAT_MIN_COUNT:
+                return gram
+    return None
+
+
+def build_repetition_guard(agent_name: str, talk_history: list[Talk]) -> str:
+    """Build a note listing the agent's own overused phrases this game, if any.
+
+    このゲーム内で自分がすでに繰り返し使っているフレーズを一覧にし, 再利用しない
+    よう促す注意書きを構築する. 該当が無ければ空文字列を返す.
+
+    Args:
+        agent_name (str): The agent's in-game name / ゲーム内のエージェント名
+        talk_history (list[Talk]): Full talk history / 発話履歴全体
+
+    Returns:
+        str: Repetition-guard note, or "" if nothing is overused /
+            反復注意書き. 反復が無ければ空文字列
+    """
+    counts = _own_ngram_counts(agent_name, talk_history)
+    overused = sorted(
+        (gram for gram, n in counts.items() if n >= REPEAT_MIN_COUNT),
+        key=lambda gram: -counts[gram],
+    )
+    if not overused:
+        return ""
+    return texts.get().GROUNDING_REPETITION_GUARD.format(
+        phrases=", ".join(f'"{p}"' for p in overused[:_REPEAT_MAX_LISTED]),
+    )
+
+
 def build_target_self_exclusion(agent_name: str) -> str:
     """Build a note forbidding the agent from targeting itself.
 
