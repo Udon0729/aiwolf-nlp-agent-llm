@@ -85,10 +85,14 @@ def build_review_prompt(
     role_map: dict[str, Any],
     status_map: dict[str, Any],
     talk_history: list[Any],
+    track: str = "turn",
 ) -> str:
     """Build the post-game review prompt grounded in the revealed roles.
 
     開示された正体に接地した終局レビューのプロンプトを構築する.
+
+    既存の教訓(その役職/人数/トラックで既に蓄積されたもの)をプロンプトに含め,
+    新しい教訓が既存の教訓と論理的に矛盾しないよう自己チェックさせる(ADR-013)。
 
     Args:
         role_value (str): The agent's own role value / 自分の役職の値
@@ -96,6 +100,7 @@ def build_review_prompt(
         role_map (dict[str, Any]): Revealed roles by name / 名前ごとの正体
         status_map (dict[str, Any]): Final alive/dead status by name / 名前ごとの最終生死
         talk_history (list[Any]): Talk history of the game / ゲームのトーク履歴
+        track (str): Game track — "turn" or "freeform" / トラック
 
     Returns:
         str: The review prompt / レビューのプロンプト
@@ -118,6 +123,15 @@ def build_review_prompt(
         "VILLAGER": t.REVIEW_FOCUS_VILLAGER,
     }
     role_focus = focus_map.get(role_value, t.REVIEW_FOCUS_DEFAULT)
+    # 既存の教訓を読み込み, 新しい教訓が矛盾しないよう自己チェックさせる(ADR-013)。
+    # load_lessons() の見出し行はTALK/WHISPER時の注入向けの文言なので, ここでは
+    # レビュー専用の見出し・指示をREVIEW_PROMPT_TEMPLATE側で与え, 見出し行は使わない。
+    player_count = len(role_map)
+    raw_lessons = load_lessons(role_value, player_count, track=track)
+    if raw_lessons:
+        existing_lessons = raw_lessons.split("\n", 1)[1] if "\n" in raw_lessons else raw_lessons
+    else:
+        existing_lessons = t.REVIEW_NO_EXISTING_LESSONS
     return t.REVIEW_PROMPT_TEMPLATE.format(
         role_value=role_value,
         agent_name=agent_name,
@@ -126,6 +140,7 @@ def build_review_prompt(
         outcome=outcome,
         transcript=transcript,
         role_focus=role_focus,
+        existing_lessons=existing_lessons,
     )
 
 
@@ -365,7 +380,7 @@ def run_post_game_review(
         logger.info("post_game_review をスキップ: 発話が希薄 (%d件)", substantive)
         return
     try:
-        prompt = build_review_prompt(role_value, agent_name, role_map, status_map, talk_history)
+        prompt = build_review_prompt(role_value, agent_name, role_map, status_map, talk_history, track)
         text = _request_review(llm_model, prompt)
         if not text:
             return

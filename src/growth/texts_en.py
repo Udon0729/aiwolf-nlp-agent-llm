@@ -550,6 +550,14 @@ REVIEW_PROMPT_TEMPLATE = (
     "were correct or mistaken, and extract GENERALISABLE lessons for future games.\n\n"
     "## Role-specific review focus\n"
     "{role_focus}\n\n"
+    "## Previously recorded lessons for this role\n"
+    "{existing_lessons}\n\n"
+    'Before writing your 3 new lessons, check them against the ones above. Do NOT write a '
+    'lesson that flatly contradicts one already recorded (e.g. do not write "trust the first '
+    'claimant" if a lesson above says the opposite, or vice versa). If this game\'s experience '
+    "genuinely differs from an existing lesson, either write about something this game actually "
+    "demonstrated instead, or state the specific condition that makes this case different rather "
+    "than issuing a flat opposite.\n\n"
     "## Output format\n"
     "Write exactly 3 lessons as bullet points (one per line). "
     "You MUST include exactly one [SELF], one [STEER], and one [PERSONA] — one lesson of each kind, "
@@ -635,6 +643,9 @@ REVIEW_OUTCOME_LOSE = "Defeat"
 
 # load_lessons() header
 REVIEW_LESSONS_HEADER = "## Lessons learned from past games (apply in the next game)"
+
+# build_review_prompt() fallback when no lessons exist yet for this role/player-count/track
+REVIEW_NO_EXISTING_LESSONS = "(No lessons recorded yet for this role — this will be the first.)"
 
 
 # ---------------------------------------------------------------------------
