@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  sanity:
+    name: 依存関係と構文の検査
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Python のセットアップ
+        run: uv python install 3.11
+
+      - name: 依存関係のインストール
+        run: uv sync
+
+      - name: 構文検査
+        run: uv run python -m compileall -q src eval
+
+  lint:
+    name: リント（当面は参考情報）
+    runs-on: ubuntu-latest
+    # コードベースが ruff select ALL を通るようになったら true を外して必須化する
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Python のセットアップ
+        run: uv python install 3.11
+
+      - name: 依存関係のインストール
+        run: uv sync --group dev
+
+      - name: ruff リント
+        run: uv run ruff check src eval
+
+      - name: ruff 整形チェック
+        run: uv run ruff format --check src eval
+
+  typecheck:
+    name: 型検査（当面は参考情報）
+    runs-on: ubuntu-latest
+    # pyright strict のエラーが解消されたら true を外して必須化する
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Python のセットアップ
+        run: uv python install 3.11
+
+      - name: 依存関係のインストール
+        run: uv sync --group dev
+
+      - name: pyright 型検査
+        run: uv run pyright
