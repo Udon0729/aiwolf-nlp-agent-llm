@@ -15,42 +15,87 @@ from __future__ import annotations
 
 # Unflappable type: low sensitivity, fast decay
 UNFLAPPABLE_WORDS: tuple[str, ...] = (
-    "calm", "composed", "unflappable", "stoic", "cool-headed",
-    "collected", "impassive", "serene", "tranquil",
+    "calm",
+    "composed",
+    "unflappable",
+    "stoic",
+    "cool-headed",
+    "collected",
+    "impassive",
+    "serene",
+    "tranquil",
 )
 
 # Bottling type: low sensitivity, slow decay, suppression
 BOTTLING_WORDS: tuple[str, ...] = (
-    "patient", "endure", "restrain", "suppress", "hold back",
-    "reserved", "taciturn", "quiet", "keep to myself",
-    "doesn't show emotions", "hides feelings", "keeps feelings inside",
+    "patient",
+    "endure",
+    "restrain",
+    "suppress",
+    "hold back",
+    "reserved",
+    "taciturn",
+    "quiet",
+    "keep to myself",
+    "doesn't show emotions",
+    "hides feelings",
+    "keeps feelings inside",
     "slow to anger",
 )
 
 EXCITABLE_WORDS: tuple[str, ...] = (
-    "anxious", "nervous", "impatient", "hasty", "impulsive",
-    "easily flustered", "worried", "timid", "high-strung",
-    "jittery", "flustered", "skittish",
+    "anxious",
+    "nervous",
+    "impatient",
+    "hasty",
+    "impulsive",
+    "easily flustered",
+    "worried",
+    "timid",
+    "high-strung",
+    "jittery",
+    "flustered",
+    "skittish",
 )
 
 CONFIDENT_WORDS: tuple[str, ...] = (
-    "confident", "bold", "assertive", "dominant", "self-assured",
-    "competitive", "proud", "daring",
+    "confident",
+    "bold",
+    "assertive",
+    "dominant",
+    "self-assured",
+    "competitive",
+    "proud",
+    "daring",
 )
 
 AGGRESSIVE_WORDS: tuple[str, ...] = (
-    "aggressive", "confrontational", "combative", "hot-tempered",
-    "fierce", "intense",
+    "aggressive",
+    "confrontational",
+    "combative",
+    "hot-tempered",
+    "fierce",
+    "intense",
 )
 
 CHEERFUL_WORDS: tuple[str, ...] = (
-    "cheerful", "optimistic", "upbeat", "positive", "bright",
-    "lively", "jovial", "sunny",
+    "cheerful",
+    "optimistic",
+    "upbeat",
+    "positive",
+    "bright",
+    "lively",
+    "jovial",
+    "sunny",
 )
 
 GLOOMY_WORDS: tuple[str, ...] = (
-    "gloomy", "pessimistic", "negative", "introverted",
-    "melancholy", "downcast",
+    "gloomy",
+    "pessimistic",
+    "negative",
+    "introverted",
+    "melancholy",
+    "downcast",
 )
 
 
@@ -174,9 +219,7 @@ GROUNDING_DIVINE_PRIORITY_AGGRESSIVE = (
     "- Watch closely: {names} has been aggressively accusing others. A Werewolf often deflects "
     "suspicion by steering votes onto villagers. Divining them can expose a wolf in plain sight."
 )
-GROUNDING_DIVINE_PRIORITY_TOP = (
-    "- Recommended divine order (highest info value first): {names}."
-)
+GROUNDING_DIVINE_PRIORITY_TOP = "- Recommended divine order (highest info value first): {names}."
 GROUNDING_SEER_PRIORITY = (
     "## Seer credibility (heuristic)\n"
     "- When multiple players claim Seer, the one who claimed FIRST (earliest turn) is more likely "
@@ -206,9 +249,7 @@ GROUNDING_GUARD_PRIORITY_SEER = (
 GROUNDING_GUARD_PRIORITY_CONFIRMED = (
     "- Confirmed human(s) to protect: {names}. The wolves want to eliminate confirmed villagers."
 )
-GROUNDING_GUARD_PRIORITY_TOP = (
-    "- Recommended guard order (highest value first): {names}."
-)
+GROUNDING_GUARD_PRIORITY_TOP = "- Recommended guard order (highest value first): {names}."
 GROUNDING_MEDIUM_GUIDE = (
     "## Medium result guidance\n"
     "- Your medium result confirms the species (werewolf/human) of the player lynched yesterday. "
@@ -265,18 +306,10 @@ RULE_MODEL_MUST_LYNCH_NOW = (
     "- This may be the last lynch that can still remove a werewolf. "
     "Concentrate the votes on your single most certain suspect."
 )
-RULE_MODEL_CONFIRMED_WOLF = (
-    "- Black (werewolf) you have confirmed by divine/medium: {names}. Push to lynch first."
-)
-RULE_MODEL_CONFIRMED_HUMAN = (
-    "- White (human) you have confirmed: {names}. Note a white can still be the possessed."
-)
-RULE_MODEL_GREY = (
-    "- Still unconfirmed (grey): {names}. The werewolf is among them. Aim divines and votes here."
-)
-RULE_MODEL_CLOSURE = (
-    "- By elimination {name} is necessarily the werewolf (every other grey is white)."
-)
+RULE_MODEL_CONFIRMED_WOLF = "- Black (werewolf) you have confirmed by divine/medium: {names}. Push to lynch first."
+RULE_MODEL_CONFIRMED_HUMAN = "- White (human) you have confirmed: {names}. Note a white can still be the possessed."
+RULE_MODEL_GREY = "- Still unconfirmed (grey): {names}. The werewolf is among them. Aim divines and votes here."
+RULE_MODEL_CLOSURE = "- By elimination {name} is necessarily the werewolf (every other grey is white)."
 RULE_MODEL_WOLF_LINE = (
     "- You are on the werewolf side. The village has only {k} lynches left to catch the wolves. "
     "Steer each day's lynch onto a villager to burn through that budget. Never reveal your role."
@@ -285,9 +318,7 @@ RULE_MODEL_POSSESSED_LINE = (
     "- You are the possessed. A seer divines you white so you can pose as a villager or a role. "
     "You do not know who the werewolf is. Muddy the village reads and help the wolves win."
 )
-RULE_MODEL_USAGE = (
-    "- Use this arithmetic to reason. Do not quote the numbers verbatim; let them shape natural talk."
-)
+RULE_MODEL_USAGE = "- Use this arithmetic to reason. Do not quote the numbers verbatim; let them shape natural talk."
 
 
 # ---------------------------------------------------------------------------
@@ -331,32 +362,33 @@ VOICE_NOTE_HEADER = "## How you speak (this persona's voice)"
 # Per-age-band few-shot examples; {age} placeholder is filled by grounding.py
 VOICE_FEW_SHOT_CHILD = (
     "You are a {age}-year-old child. Speak like a child would — short, simple, a bit naive.\n"
-    "Do NOT use adult words like 'narrative' 'deflection' 'synergy' 'consensus' 'rhetoric' 'tactic' 'strategy' 'inefficient'.\n"
+    "Do NOT use adult words like 'narrative' 'deflection' 'synergy' 'consensus' 'rhetoric' "
+    "'tactic' 'strategy' 'inefficient'.\n"
     "Here is how you should sound. Imitate this style:\n"
-    "  Example 1: \"Shion is being mean. I don't like how she talks to us.\"\n"
-    "  Example 2: \"I think Takumi is weird. He keeps saying stuff that doesn't make sense.\"\n"
-    "  Example 3: \"I'm scared. Why is everyone fighting? Can we just vote and stop yelling?\""
+    '  Example 1: "Shion is being mean. I don\'t like how she talks to us."\n'
+    '  Example 2: "I think Takumi is weird. He keeps saying stuff that doesn\'t make sense."\n'
+    '  Example 3: "I\'m scared. Why is everyone fighting? Can we just vote and stop yelling?"'
 )
 VOICE_FEW_SHOT_TEEN = (
     "You are {age}. Talk like a young person — casual, direct, a bit emotional.\n"
     "Avoid stiff or bureaucratic language. Here is how you should sound:\n"
-    "  Example 1: \"Wait that's super suspicious! Why would you vote for them without any proof?\"\n"
-    "  Example 2: \"Okay I totally forgot it was Day 0. My bad! But still we need to figure out who's lying.\"\n"
-    "  Example 3: \"This is so frustrating. You're all just going in circles and nobody is actually listening.\""
+    '  Example 1: "Wait that\'s super suspicious! Why would you vote for them without any proof?"\n'
+    '  Example 2: "Okay I totally forgot it was Day 0. My bad! But still we need to figure out who\'s lying."\n'
+    '  Example 3: "This is so frustrating. You\'re all just going in circles and nobody is actually listening."'
 )
 VOICE_FEW_SHOT_ADULT = (
     "You are a {age}-year-old adult. Speak in a way that fits your profile's personality.\n"
     "Your vocabulary and sentence length should reflect your character traits. Here is how you should sound:\n"
-    "  Example 1: \"I want to hear a concrete result before I commit to a vote. Timing alone is not enough.\"\n"
-    "  Example 2: \"Two claims and zero evidence. We need to wait for Day 1 before we lynch anyone.\"\n"
-    "  Example 3: \"The real issue is not who spoke first but who can back their claim with a fact.\""
+    '  Example 1: "I want to hear a concrete result before I commit to a vote. Timing alone is not enough."\n'
+    '  Example 2: "Two claims and zero evidence. We need to wait for Day 1 before we lynch anyone."\n'
+    '  Example 3: "The real issue is not who spoke first but who can back their claim with a fact."'
 )
 VOICE_FEW_SHOT_SENIOR = (
     "You are {age} years old. Speak with the settled phrasing of age and long experience.\n"
     "You may draw on metaphors from a long life. Here is how you should sound:\n"
-    "  Example 1: \"I have seen many storms in my time. Haste is a poor compass when the path is unclear.\"\n"
-    "  Example 2: \"A house built on suspicion alone will not stand. Give me a name and a result.\"\n"
-    "  Example 3: \"Patience is not weakness. Let the Seer's result come before we tighten the rope.\""
+    '  Example 1: "I have seen many storms in my time. Haste is a poor compass when the path is unclear."\n'
+    '  Example 2: "A house built on suspicion alone will not stand. Give me a name and a result."\n'
+    '  Example 3: "Patience is not weakness. Let the Seer\'s result come before we tighten the rope."'
 )
 
 VOICE_COMMON = (
@@ -552,9 +584,9 @@ REVIEW_PROMPT_TEMPLATE = (
     "{role_focus}\n\n"
     "## Previously recorded lessons for this role\n"
     "{existing_lessons}\n\n"
-    'Before writing your 3 new lessons, check them against the ones above. Do NOT write a '
+    "Before writing your 3 new lessons, check them against the ones above. Do NOT write a "
     'lesson that flatly contradicts one already recorded (e.g. do not write "trust the first '
-    'claimant" if a lesson above says the opposite, or vice versa). If this game\'s experience '
+    "claimant\" if a lesson above says the opposite, or vice versa). If this game's experience "
     "genuinely differs from an existing lesson, either write about something this game actually "
     "demonstrated instead, or state the specific condition that makes this case different rather "
     "than issuing a flat opposite.\n\n"
@@ -581,7 +613,8 @@ REVIEW_PROMPT_TEMPLATE = (
     "DEFENSE (when accused), GENERAL (always applicable).\n"
     "Format: [ROLE][SITUATION] Principle → why/when.\n"
     "Example: [SELF][CO] Claim Seer on Day 0 before anyone else → first claimant is trusted more.\n"
-    "Example: [STEER][COUNTER] Frame a late counter-claim as 'suspicious timing' → the village doubts the late claimant.\n"
+    "Example: [STEER][COUNTER] Frame a late counter-claim as 'suspicious timing' → "
+    "the village doubts the late claimant.\n"
     "Keep each lesson to ONE line. No multi-line explanations.\n\n"
     "After the 3 lessons, judge whether your emotional sensitivity (reactiveness) was appropriate.\n"
     "Emotion was too strong and led to mistakes → HIGH\n"

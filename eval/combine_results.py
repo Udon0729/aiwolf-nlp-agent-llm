@@ -105,9 +105,9 @@ def main() -> None:
     for c in order:
         s = merged[c]
         print(
-            f"{c:<12}{s['parsed']:>4}{s['village_win_rate']*100:>7.0f}%"
-            f"{s['vote_hit_wolfside']:>7}/{s['vote_total']:<4}({s['vote_acc_wolfside']*100:>3.0f}%)"
-            f"{s['divine_hit_werewolf']:>5}/{s['divine_total']:<3}({s['divine_acc_werewolf']*100:>3.0f}%)"
+            f"{c:<12}{s['parsed']:>4}{s['village_win_rate'] * 100:>7.0f}%"
+            f"{s['vote_hit_wolfside']:>7}/{s['vote_total']:<4}({s['vote_acc_wolfside'] * 100:>3.0f}%)"
+            f"{s['divine_hit_werewolf']:>5}/{s['divine_total']:<3}({s['divine_acc_werewolf'] * 100:>3.0f}%)"
             f"{s['override_total']:>7}{s['gating_inject_total']:>10}",
         )
 
@@ -120,11 +120,14 @@ def main() -> None:
             continue
         s = merged[c]
         z, p = _two_proportion_z(
-            full["vote_hit_wolfside"], full["vote_total"], s["vote_hit_wolfside"], s["vote_total"],
+            full["vote_hit_wolfside"],
+            full["vote_total"],
+            s["vote_hit_wolfside"],
+            s["vote_total"],
         )
         sig = "***" if p < _P_STRONG else "**" if p < _P_MEDIUM else "*" if p < _P_WEAK else ""
         drop = full["vote_acc_wolfside"] - s["vote_acc_wolfside"]
-        print(f"  full vs {c:<11}: Δ={drop*100:+5.0f}pt  z={z:+.2f}  p={p:.3f} {sig}")
+        print(f"  full vs {c:<11}: Δ={drop * 100:+5.0f}pt  z={z:+.2f}  p={p:.3f} {sig}")
 
 
 if __name__ == "__main__":

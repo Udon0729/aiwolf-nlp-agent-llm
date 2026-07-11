@@ -57,6 +57,8 @@ def get() -> Any:  # noqa: ANN401
     """
     if _lang == "en":
         from growth import texts_en  # noqa: PLC0415
+
         return texts_en
     from growth import texts_ja  # noqa: PLC0415
+
     return texts_ja

@@ -33,8 +33,8 @@ _CONDITION_DIRS = {
     "no_reading": "json_w2",
     "no_gating": "json_w3",
 }
-_PERSONA_RE = re.compile(r"ペルソナ整合[:：]\s*([1-5])")  # noqa: RUF001
-_LOGIC_RE = re.compile(r"論理整合[:：]\s*([1-5])")  # noqa: RUF001
+_PERSONA_RE = re.compile(r"ペルソナ整合[:：]\s*([1-5])")
+_LOGIC_RE = re.compile(r"論理整合[:：]\s*([1-5])")
 
 _RUBRIC = (
     "あなたは人狼ゲームの発話評価者です。あるエージェントの【性格プロフィール】【役職】【全発言】を読み、"

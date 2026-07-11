@@ -121,6 +121,7 @@ def _judge_instruction_adherence(name: str, role: str, skill_text: str, transcri
     match = _INSTR_SCORE_RE.search(text)
     return int(match.group(1)) if match else None
 
+
 _JUDGE_TMPL = (
     "あなたは人狼ゲームの発話の審査員です。以下は1ゲームの会話記録と、審査対象の人物"
     "【{name}】の性格と役職です。{name}の発話を次の6項目で1〜5の整数で採点してください。\n"

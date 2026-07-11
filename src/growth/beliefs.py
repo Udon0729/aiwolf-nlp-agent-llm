@@ -28,14 +28,24 @@ class PlayerRecord:
     ひとりのプレイヤーについて蓄積した観察.
     """
 
-    utterances: list[str] = field(default_factory=list)
-    vote_targets: list[str] = field(default_factory=list)
-    claims: list[str] = field(default_factory=list)
+    utterances: list[str] = field(default_factory=list[str])
+    vote_targets: list[str] = field(default_factory=list[str])
+    claims: list[str] = field(default_factory=list[str])
 
 
 _CO_KEYWORDS_JA = ("占い師", "霊能者", "騎士", "狩人", "人狼", "狂人", "CO", "カミングアウト")
-_CO_KEYWORDS_EN = ("seer", "medium", "bodyguard", "hunter", "werewolf", "possessed",
-                   "coming out", "CO", "claim", "I am the")
+_CO_KEYWORDS_EN = (
+    "seer",
+    "medium",
+    "bodyguard",
+    "hunter",
+    "werewolf",
+    "possessed",
+    "coming out",
+    "CO",
+    "claim",
+    "I am the",
+)
 
 
 def _extract_claims(text: str) -> list[str]:
@@ -136,15 +146,15 @@ class BeliefTracker:
             rec = self._records[name]
             if not rec.utterances and not rec.vote_targets and not rec.claims:
                 continue
-            parts: list[str] = []
-            for claim in rec.claims:
-                parts.append(t.BELIEFS_CLAIM_LINE.format(name=name, claim=claim))
-            for target in rec.vote_targets:
-                parts.append(t.BELIEFS_VOTE_LINE.format(voter=name, target=target))
+            parts: list[str] = [t.BELIEFS_CLAIM_LINE.format(name=name, claim=claim) for claim in rec.claims]
+            parts.extend(t.BELIEFS_VOTE_LINE.format(voter=name, target=target) for target in rec.vote_targets)
             if len(rec.utterances) > 1:
-                parts.append(t.BELIEFS_UTTERANCE_SUMMARY.format(
-                    name=name, count=len(rec.utterances),
-                ))
+                parts.append(
+                    t.BELIEFS_UTTERANCE_SUMMARY.format(
+                        name=name,
+                        count=len(rec.utterances),
+                    )
+                )
             if parts:
                 lines.extend(parts)
         if not lines:

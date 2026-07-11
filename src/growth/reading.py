@@ -75,11 +75,7 @@ def build_tell_reading(info: Info | None, agent_name: str, talk_history: list[Ta
     t = texts.get()
     alive = {k for k, v in info.status_map.items() if _status_value(v) == "ALIVE"}
     latest = _latest_utterances(agent_name, talk_history)
-    lines = [
-        t.READING_UTTERANCE_LINE.format(name=name, text=text)
-        for name, text in latest.items()
-        if name in alive
-    ]
+    lines = [t.READING_UTTERANCE_LINE.format(name=name, text=text) for name, text in latest.items() if name in alive]
     if not lines:
         return ""
     return t.READING_TELL_HEADER + "\n" + "\n".join(lines)

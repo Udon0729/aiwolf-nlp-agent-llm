@@ -225,7 +225,9 @@ class EmotionDynamics:
         """
         traits = derive_traits(profile)
         traits.sensitivity = _clip(
-            traits.sensitivity * sensitivity_scale + calibration_adj, 0.0, 1.5,
+            traits.sensitivity * sensitivity_scale + calibration_adj,
+            0.0,
+            1.5,
         )
         base = traits.baseline
         return cls(traits=traits, state=Vad(base.valence, base.arousal, base.dominance))

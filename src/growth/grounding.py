@@ -104,8 +104,7 @@ def build_self_stance(
     elif role_value in _INFO_ROLES:
         lines.append(t.GROUNDING_NO_RESULTS_YET)
     own_talks = [
-        talk.text for talk in talk_history
-        if talk.agent == agent_name and talk.text and not talk.skip and not talk.over
+        talk.text for talk in talk_history if talk.agent == agent_name and talk.text and not talk.skip and not talk.over
     ]
     if own_talks:
         recent = own_talks[-_RECENT_OWN_TALKS:]
@@ -166,11 +165,29 @@ REPEAT_MIN_COUNT = 2
 _REPEAT_MAX_LISTED = 5
 _REPEAT_WORD_RE = re.compile(r"[a-zA-Z']+")
 # 文法上必須で反復扱いすべきでない機能語のみのbigram
-_REPEAT_STOP_NGRAMS = frozenset({
-    "is a", "is the", "to the", "of the", "in the", "and the", "on the",
-    "at the", "for the", "with the", "that is", "this is", "it is",
-    "i am", "you are", "we are", "i will", "do not", "did not",
-})
+_REPEAT_STOP_NGRAMS = frozenset(
+    {
+        "is a",
+        "is the",
+        "to the",
+        "of the",
+        "in the",
+        "and the",
+        "on the",
+        "at the",
+        "for the",
+        "with the",
+        "that is",
+        "this is",
+        "it is",
+        "i am",
+        "you are",
+        "we are",
+        "i will",
+        "do not",
+        "did not",
+    }
+)
 _REPEAT_CHAR_NGRAM_SIZE = 6  # 日本語(単語境界なし)用の文字n-gram長
 
 
@@ -278,6 +295,10 @@ def build_target_self_exclusion(agent_name: str) -> str:
     return texts.get().GROUNDING_TARGET_SELF_EXCLUSION.format(agent_name=agent_name)
 
 
+# 1発話内で攻撃キーワードが何個ヒットしたら「攻撃的な発言」とみなすかの閾値
+_AGGRESSIVE_KEYWORD_MIN_HITS = 2
+
+
 def build_divine_guide(
     agent_name: str,
     alive: list[str],
@@ -334,7 +355,7 @@ def build_divine_guide(
             continue
         lowered = talk.text.lower()
         attack_count = sum(1 for kw in attack_keywords if kw in lowered)
-        if attack_count >= 2 and talk.agent not in aggressive_players:
+        if attack_count >= _AGGRESSIVE_KEYWORD_MIN_HITS and talk.agent not in aggressive_players:
             aggressive_players.append(talk.agent)
     # 4. 優先度順に候補を組み立てる
     priority: list[str] = []
@@ -350,24 +371,20 @@ def build_divine_guide(
     remaining_grey = [g for g in grey if g not in priority]
     priority.extend(remaining_grey)
 
-    # 注記を構築: 優先候補と理由を明示
+    # 優先候補と理由を明示する注記をここから組み立てる
     lines = [t.GROUNDING_DIVINE_GUIDE.format(grey=", ".join(grey))]
     if counter_claimants:
-        lines.append(t.GROUNDING_DIVINE_PRIORITY_COUNTER.format(
-            names=", ".join(counter_claimants)))
+        lines.append(t.GROUNDING_DIVINE_PRIORITY_COUNTER.format(names=", ".join(counter_claimants)))
     if aggressive_players:
-        lines.append(t.GROUNDING_DIVINE_PRIORITY_AGGRESSIVE.format(
-            names=", ".join(aggressive_players)))
+        lines.append(t.GROUNDING_DIVINE_PRIORITY_AGGRESSIVE.format(names=", ".join(aggressive_players)))
     if quiet_players:
-        lines.append(t.GROUNDING_DIVINE_PRIORITY_QUIET.format(
-            names=", ".join(quiet_players)))
+        lines.append(t.GROUNDING_DIVINE_PRIORITY_QUIET.format(names=", ".join(quiet_players)))
     if priority[:3] != grey[:3]:
-        lines.append(t.GROUNDING_DIVINE_PRIORITY_TOP.format(
-            names=", ".join(priority[:3])))
+        lines.append(t.GROUNDING_DIVINE_PRIORITY_TOP.format(names=", ".join(priority[:3])))
     return "\n".join(lines)
 
 
-# 占い師COのキーワード(英・日)
+# 占い師COを示すキーワード群。英語表現と日本語表現の両方を含む
 _SEER_CO_KEYWORDS_EN = ("i am the seer", "i'm the seer", "i claim seer", "i'm seer")
 _SEER_CO_KEYWORDS_JA = ("占い師です", "占い師を名乗", "占い師co", "占い師CO", "私は占い師")
 
@@ -389,10 +406,12 @@ def _detect_seer_claim_order(talk_history: list[Talk]) -> list[str]:
         if talk.skip or not talk.text:
             continue
         lowered = talk.text.lower()
-        if any(kw in lowered for kw in _SEER_CO_KEYWORDS_EN) or any(kw in talk.text for kw in _SEER_CO_KEYWORDS_JA):
-            if talk.agent not in seen:
-                seen.add(talk.agent)
-                order.append(talk.agent)
+        is_claim = any(kw in lowered for kw in _SEER_CO_KEYWORDS_EN) or any(
+            kw in talk.text for kw in _SEER_CO_KEYWORDS_JA
+        )
+        if is_claim and talk.agent not in seen:
+            seen.add(talk.agent)
+            order.append(talk.agent)
     return order
 
 
@@ -410,10 +429,14 @@ def build_seer_priority_claimants(talk_history: list[Talk]) -> list[str]:
     return _detect_seer_claim_order(talk_history)
 
 
+# 占い師COが複数出現し「対抗CO」状態とみなすために必要な最小人数
+_MIN_CLAIMANTS_FOR_COUNTER_CLAIM = 2
+
+
 def build_seer_priority(
     talk_history: list[Talk],
-    agent_name: str,
-    role_value: str,
+    _agent_name: str,
+    _role_value: str,
 ) -> str:
     """Build a note on Seer credibility when multiple Seer claims exist.
 
@@ -422,14 +445,18 @@ def build_seer_priority(
 
     Args:
         talk_history (list[Talk]): Talk history of the game / ゲームのトーク履歴
-        agent_name (str): The agent's in-game name / ゲーム内のエージェント名
-        role_value (str): The agent's role value / エージェントの役職値
+        _agent_name (str): The agent's in-game name (unused, kept for call-site symmetry
+            with sibling builders) / ゲーム内のエージェント名(未使用, 他の構築関数との呼び出し
+            引数の対称性のために保持)
+        _role_value (str): The agent's role value (unused, kept for call-site symmetry
+            with sibling builders) / エージェントの役職値(未使用, 他の構築関数との呼び出し
+            引数の対称性のために保持)
 
     Returns:
         str: Seer priority note (empty if no counter-claim) / 占い師優先の注記(対抗が無ければ空)
     """
     claimants = _detect_seer_claim_order(talk_history)
-    if len(claimants) < 2:
+    if len(claimants) < _MIN_CLAIMANTS_FOR_COUNTER_CLAIM:
         return ""
     return texts.get().GROUNDING_SEER_PRIORITY
 
@@ -464,11 +491,20 @@ def build_werewolf_attack_guide(
         if talk.skip or not talk.text or talk.agent == agent_name:
             continue
         lowered = talk.text.lower()
-        if my_name_lower in lowered and any(kw in lowered for kw in (
-            "wolf", "werewolf", "suspicious", "liar", "lying", "fake", "vote",
-        )):
-            if talk.agent not in my_attackers:
-                my_attackers.append(talk.agent)
+        is_attacking_me = my_name_lower in lowered and any(
+            kw in lowered
+            for kw in (
+                "wolf",
+                "werewolf",
+                "suspicious",
+                "liar",
+                "lying",
+                "fake",
+                "vote",
+            )
+        )
+        if is_attacking_me and talk.agent not in my_attackers:
+            my_attackers.append(talk.agent)
     # 自分を攻撃している相手をさらに攻撃している第三者は味方の可能性
     for talk in talk_history:
         if talk.skip or not talk.text or talk.agent == agent_name:
@@ -476,18 +512,27 @@ def build_werewolf_attack_guide(
         lowered = talk.text.lower()
         for attacker in my_attackers:
             attacker_lower = attacker.lower()
-            if attacker_lower in lowered and any(kw in lowered for kw in (
-                "wolf", "werewolf", "suspicious", "liar", "lying", "fake", "vote",
-            )):
-                if talk.agent not in likely_allies and talk.agent != agent_name:
-                    likely_allies.append(talk.agent)
+            attacks_attacker = attacker_lower in lowered and any(
+                kw in lowered
+                for kw in (
+                    "wolf",
+                    "werewolf",
+                    "suspicious",
+                    "liar",
+                    "lying",
+                    "fake",
+                    "vote",
+                )
+            )
+            if attacks_attacker and talk.agent not in likely_allies and talk.agent != agent_name:
+                likely_allies.append(talk.agent)
     if not likely_allies:
         return ""
     return texts.get().GROUNDING_WEREWOLF_ATTACK_GUIDE
 
 
 def build_medium_guide(
-    agent_name: str,
+    _agent_name: str,
     talk_history: list[Talk],
     known_results: list[str],
     known_species: dict[str, str],
@@ -500,7 +545,9 @@ def build_medium_guide(
     これを占い師の黒/白判定と照合し、真偽を判定する材料を提供する。
 
     Args:
-        agent_name (str): The medium's in-game name / 霊媒師のゲーム内名
+        _agent_name (str): The medium's in-game name (unused, kept for call-site symmetry
+            with sibling builders) / 霊媒師のゲーム内名(未使用, 他の構築関数との呼び出し
+            引数の対称性のために保持)
         talk_history (list[Talk]): Talk history / 発話履歴
         known_results (list[str]): Accumulated medium results / 蓄積された霊媒結果
         known_species (dict[str, str]): Confirmed species by target / 確定種族
@@ -529,8 +576,7 @@ def build_medium_guide(
     # 占い師CO者の主張と照合するよう促す
     seer_claimants = _detect_seer_claim_order(talk_history)
     if seer_claimants:
-        lines.append(t.GROUNDING_MEDIUM_CROSSCHECK.format(
-            seers=", ".join(seer_claimants)))
+        lines.append(t.GROUNDING_MEDIUM_CROSSCHECK.format(seers=", ".join(seer_claimants)))
 
     return "\n".join(lines)
 
@@ -565,7 +611,7 @@ def build_guard_guide(
         confirmed_humans = [a for a in alive if known_species.get(a) == "HUMAN"]
         confirmed_wolves = {a for a in alive if known_species.get(a) == "WEREWOLF"}
 
-    # 護衛候補を優先度順に組み立てる(自分以外の生存者)
+    # 自分以外の生存者から護衛候補を優先度順に組み立てる
     candidates = [a for a in alive if a != agent_name and a not in confirmed_wolves]
     priority: list[str] = []
 
@@ -586,9 +632,8 @@ def build_guard_guide(
         if talk.skip or not talk.text:
             continue
         lowered = talk.text.lower()
-        if any(kw in lowered for kw in medium_keywords):
-            if talk.agent in candidates and talk.agent not in priority:
-                priority.append(talk.agent)
+        if any(kw in lowered for kw in medium_keywords) and talk.agent in candidates and talk.agent not in priority:
+            priority.append(talk.agent)
 
     # 4. 残りの候補
     for a in candidates:
@@ -604,10 +649,8 @@ def build_guard_guide(
         if first_seer in candidates:
             lines.append(t.GROUNDING_GUARD_PRIORITY_SEER.format(name=first_seer))
     if confirmed_humans:
-        lines.append(t.GROUNDING_GUARD_PRIORITY_CONFIRMED.format(
-            names=", ".join(confirmed_humans)))
-    lines.append(t.GROUNDING_GUARD_PRIORITY_TOP.format(
-        names=", ".join(priority[:3])))
+        lines.append(t.GROUNDING_GUARD_PRIORITY_CONFIRMED.format(names=", ".join(confirmed_humans)))
+    lines.append(t.GROUNDING_GUARD_PRIORITY_TOP.format(names=", ".join(priority[:3])))
     return "\n".join(lines)
 
 

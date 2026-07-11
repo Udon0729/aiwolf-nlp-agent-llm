@@ -49,12 +49,16 @@ docstring-code-format = true
 
 [tool.ruff.lint]
 select = ["ALL"]
+# COM812(末尾カンマ)はフォーマッタと衝突するため除外する(ruff自身の警告に従う)
+ignore = ["COM812"]
 unfixable = ["F401", "F841"]
 pydocstyle.convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-# eval は分析用のCLIツール。標準出力への印字を許可する
-"eval/**" = ["T201", "INP001"]
-# texts_*.py はテキスト定数ファイル。日本語コメントを ERA001 が誤検知するため抑制する
-"src/growth/texts_ja.py" = ["ERA001"]
+# eval は分析用のCLIツール。標準出力への印字を許可する。判定プロンプトの日本語文中の
+# 全角括弧・全角記号を RUF001 が誤検知するため抑制する
+"eval/**" = ["T201", "INP001", "RUF001"]
+# texts_*.py はテキスト定数ファイル。日本語コメント・日本語文中の全角記号を
+# ERA001/RUF001 が誤検知するため抑制する
+"src/growth/texts_ja.py" = ["ERA001", "RUF001"]
 "src/growth/texts_en.py" = ["ERA001"]

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import json
 import logging
@@ -68,9 +69,7 @@ def _compute_outcome(role_value: str, role_map: dict[str, Any], status_map: dict
         str: "勝利" or "敗北" / 勝敗
     """
     alive_wolves = sum(
-        1
-        for name, role in role_map.items()
-        if _value(role) == "WEREWOLF" and _value(status_map.get(name)) == "ALIVE"
+        1 for name, role in role_map.items() if _value(role) == "WEREWOLF" and _value(status_map.get(name)) == "ALIVE"
     )
     village_won = alive_wolves == 0
     my_wolf_side = role_value in _WOLF_SIDE
@@ -109,9 +108,7 @@ def build_review_prompt(
     roles_block = "\n".join(f"- {name}: {_value(role)}" for name, role in role_map.items())
     alive = [name for name, status in status_map.items() if _value(status) == "ALIVE"]
     alive_str = ", ".join(alive) if alive else t.GROUNDING_ALIVE_NONE
-    transcript = "\n".join(
-        f"{talk.agent}: {talk.text}" for talk in talk_history if talk.text and not talk.skip
-    )
+    transcript = "\n".join(f"{talk.agent}: {talk.text}" for talk in talk_history if talk.text and not talk.skip)
     outcome = _compute_outcome(role_value, role_map, status_map)
     # 役職別の振り返り観点を選択する
     focus_map = {
@@ -272,10 +269,8 @@ def _update_calibration(role_value: str, player_count: int, delta: float, track:
     path.parent.mkdir(parents=True, exist_ok=True)
     data: dict[str, float] = {"sensitivity_adj": 0.0, "samples": 0}
     if path.is_file():
-        try:
+        with contextlib.suppress(json.JSONDecodeError, KeyError):
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, KeyError):
-            pass
     n = data.get("samples", 0)
     old_adj = data.get("sensitivity_adj", 0.0)
     new_n = n + 1
@@ -286,8 +281,7 @@ def _update_calibration(role_value: str, player_count: int, delta: float, track:
             json.dump({"sensitivity_adj": round(new_adj, 4), "samples": new_n}, f)
         finally:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-    logger.info("感受性較正を更新: role=%s, delta=%.3f, cumulative=%.4f (n=%d)",
-                role_value, delta, new_adj, new_n)
+    logger.info("感受性較正を更新: role=%s, delta=%.3f, cumulative=%.4f (n=%d)", role_value, delta, new_adj, new_n)
 
 
 def load_calibration(role_value: str, player_count: int | None, track: str = "turn") -> float:
@@ -372,10 +366,7 @@ def run_post_game_review(
         return
     # トランスクリプトが希薄(実発話がごく少数)な対局は, 材料不足で教訓を捏造しやすいので
     # レビューをスキップし, 偽の教訓が将来ゲームへ蓄積されるのを防ぐ.
-    substantive = sum(
-        1 for talk in talk_history
-        if getattr(talk, "text", None) and not getattr(talk, "skip", False)
-    )
+    substantive = sum(1 for talk in talk_history if getattr(talk, "text", None) and not getattr(talk, "skip", False))
     if substantive < _MIN_TRANSCRIPT_TALKS:
         logger.info("post_game_review をスキップ: 発話が希薄 (%d件)", substantive)
         return
@@ -396,6 +387,8 @@ def run_post_game_review(
 
 _OUTCOME_TAG_PATTERN = re.compile(r"^\s*-\s*\([^/]+/([^)]+)\)\s*")
 _DEDUP_MIN_OVERLAP = 0.6
+# Jaccard係数を語単位で計算するか文字単位で計算するかを分ける語数の閾値
+_WORD_JACCARD_MIN_WORDS = 3
 
 
 def _extract_outcome(line: str) -> str | None:
@@ -407,7 +400,7 @@ def _extract_outcome(line: str) -> str | None:
 def _lesson_body(line: str) -> str:
     """行からタグを除いた教訓本文を返す."""
     m = _OUTCOME_TAG_PATTERN.match(line)
-    return line[m.end():].strip() if m else line.strip()
+    return line[m.end() :].strip() if m else line.strip()
 
 
 def _is_near_duplicate(candidate: str, selected: list[str]) -> bool:
@@ -417,13 +410,10 @@ def _is_near_duplicate(candidate: str, selected: list[str]) -> bool:
     英語で文字単位だとアルファベット集合が似通いすぎて全て重複判定になるため。
     """
     c_words = candidate.split()
-    use_words = len(c_words) > 3
+    use_words = len(c_words) > _WORD_JACCARD_MIN_WORDS
     c_set = set(c_words) if use_words else set(candidate)
     for s in selected:
-        if use_words:
-            s_set = set(s.split())
-        else:
-            s_set = set(s)
+        s_set = set(s.split()) if use_words else set(s)
         overlap = len(c_set & s_set) / max(len(c_set | s_set), 1)
         if overlap > _DEDUP_MIN_OVERLAP:
             return True
@@ -438,17 +428,17 @@ _LESSON_TAGS = ("SELF", "STEER", "PERSONA")
 # パターンは (date/result) [ROLE_TAG][SITUATION_TAG] の形を想定
 _SITUATION_TAG_PATTERN = re.compile(r"^-?\s*\([^)]+\)\s*\[[A-Z_]+\]\s*\[([A-Z_]+)\]")
 _SITUATION_TAGS = (
-    "CO",          # 占い師CO・対抗COの場面
-    "COUNTER",     # 対抗COへの対処
-    "VOTE",        # 投票の判断
-    "WHISPER",     # 囁きフェーズ・人狼同士の連携
-    "ATTACK",      # 襲撃先の選定
-    "GUARD",       # 護衛先の選定
-    "DIVINE",      # 占い先の選定
-    "MEDIUM",      # 霊媒結果の公表・活用
-    "ENDGAME",     # 終盤(残り少人数・パリティ接近)
-    "DEFENSE",     # 自分が疑われた時の防御
-    "GENERAL",     # 汎用(特定の場面に限定しない)
+    "CO",  # 占い師CO・対抗COの場面
+    "COUNTER",  # 対抗COへの対処
+    "VOTE",  # 投票の判断
+    "WHISPER",  # 囁きフェーズ・人狼同士の連携
+    "ATTACK",  # 襲撃先の選定
+    "GUARD",  # 護衛先の選定
+    "DIVINE",  # 占い先の選定
+    "MEDIUM",  # 霊媒結果の公表・活用
+    "ENDGAME",  # 終盤(残り少人数・パリティ接近)
+    "DEFENSE",  # 自分が疑われた時の防御
+    "GENERAL",  # 汎用(特定の場面に限定しない)
 )
 
 
@@ -514,6 +504,7 @@ def load_lessons(
             タグで絞り込む(None は全て)
         situations (tuple[str, ...] | None): Situation tags to prioritize /
             優先する状況タグ(例: ("CO", "COUNTER"))
+        track (str): Game track — "turn" or "freeform" / トラック
 
     Returns:
         str: Lessons block, or empty string if none / 教訓ブロック. 無ければ空文字列
@@ -532,7 +523,7 @@ def load_lessons(
     # タグ指定がある場合はそのタグの行のみ残す
     if tags:
         tag_set = {tag.upper() for tag in tags}
-        lines = [l for l in lines if _extract_tag(_lesson_body(l)) in tag_set]
+        lines = [line for line in lines if _extract_tag(_lesson_body(line)) in tag_set]
         if not lines:
             return ""
     valid: list[str] = []
@@ -541,8 +532,8 @@ def load_lessons(
         if len(body) < _MIN_LESSON_LENGTH or _HEADING_PATTERN.search(body):
             continue
         valid.append(line)
-    losses = [l for l in valid if _extract_outcome(l) == lose_label]
-    wins = [l for l in valid if l not in losses]
+    losses = [line for line in valid if _extract_outcome(line) == lose_label]
+    wins = [line for line in valid if line not in losses]
 
     # 状況タグの優先選択: 指定された状況に合致する教訓を優先し、
     # 不足分は GENERAL で補充する
@@ -586,7 +577,7 @@ def load_lessons(
                 result.append(line)
                 selected_bodies.append(body)
         else:
-            # 従来通り: 最新順に選ぶ
+            # 状況タグ指定がない場合は従来通り最新順に選ぶ
             for line in reversed(pool):
                 if len(result) >= budget:
                     break
@@ -620,5 +611,4 @@ def strip_tag_for_dedup(line: str) -> str:
     body = _lesson_body(line)
     body = _strip_tag(body)
     # Also strip situation tag if present
-    body = re.sub(r"^\[[A-Z_]+\]\s*", "", body)
-    return body
+    return re.sub(r"^\[[A-Z_]+\]\s*", "", body)

@@ -65,6 +65,8 @@ T = TypeVar("T")
 # 確定事実と直近発言は各リクエストで再供給されるため, 古い巨大な行動プロンプトは強く落とす.
 _MAX_HISTORY_MESSAGES = 4
 _KEEP_HEAD_MESSAGES = 2
+# 生存者数がこの値以下になったら終盤とみなし, ENDGAME教訓を優先的に注入する閾値.
+_ENDGAME_ALIVE_THRESHOLD = 4
 _SPEECH_PARENTHETICAL_RE = re.compile(r"\([^()\n]{0,120}\)|\uFF08[^\uFF08\uFF09\n]{0,120}\uFF09")
 _SPEECH_EMOTE_RE = re.compile(r"[*\uFF0A][^*\uFF0A\n]{1,80}[*\uFF0A]")
 _SPEECH_ELLIPSIS_RE = re.compile(r"(?:…+|‥+|\.{3,}|(?:・\s*){3,}|･{3,})")
@@ -73,16 +75,18 @@ _SPEECH_OVER_ONLY_RE = re.compile(r"\s*over\s*[。.!\uFF01]?\s*", re.IGNORECASE)
 _SPEECH_OVER_TOKEN_RE = re.compile(r"(?<![A-Za-z])Over(?![A-Za-z])", re.IGNORECASE)
 _SPEECH_SPACES_RE = re.compile(r"[ \t　]{2,}")
 _SPEECH_SPACE_BEFORE_PUNCT_RE = re.compile(r"\s+([、。,.!?\uFF01\uFF1F])")
-_SPEECH_REMOVE_CHARS = str.maketrans({
-    "「": "",
-    "」": "",
-    "『": "",
-    "』": "",
-    "\uFF08": "",
-    "\uFF09": "",
-    "(": "",
-    ")": "",
-})
+_SPEECH_REMOVE_CHARS = str.maketrans(
+    {
+        "「": "",
+        "」": "",
+        "『": "",
+        "』": "",
+        "\uff08": "",
+        "\uff09": "",
+        "(": "",
+        ")": "",
+    }
+)
 
 _MAX_SPEECH_COUNTED_CHARS = 125
 _SPEECH_LEADING_MENTION_RE = re.compile(r"^(@\S+\s+)(.*)$", re.DOTALL)
@@ -334,7 +338,9 @@ class Agent:
             scale = float(self._growth_config("emotion").get("sensitivity_scale", 1.0))
             cal = load_calibration(self.role.value, len(self.info.status_map), self.track)
             self.emotion = EmotionDynamics.from_profile(
-                self.info.profile, sensitivity_scale=scale, calibration_adj=cal,
+                self.info.profile,
+                sensitivity_scale=scale,
+                calibration_adj=cal,
             )
         name = self.info.agent or self.agent_name
         self.emotion.update(self.info, self.talk_history, name)
@@ -414,19 +420,22 @@ class Agent:
         if response in candidates:
             override = self._gated_override(response, candidates)
             return override or response
-        # LLMが文章を返した場合: 生存候補の名前を含むか探す
+        # LLMが文章で応答した場合は生存候補の名前を含んでいないか探す
         for candidate in candidates:
             if candidate in response:
                 self.agent_logger.logger.info(
                     "対象選択の応答から名前を抽出しました: %s -> %s (%s)",
-                    response[:60], candidate, self.request,
+                    response[:60],
+                    candidate,
+                    self.request,
                 )
                 override = self._gated_override(candidate, candidates)
                 return override or candidate
         # 名前が見つからなければ候補から無作為に選ぶ
         self.agent_logger.logger.warning(
             "対象選択の応答に生存者の名前が含まれず無作為に選びます: %s (%s)",
-            response[:60], self.request,
+            response[:60],
+            self.request,
         )
         return random.choice(candidates)  # noqa: S311
 
@@ -559,7 +568,7 @@ class Agent:
                 player_count = len(self.info.status_map)
                 parts.append(load_role_skill(self.role.value, player_count, self.track))
                 # ペルソナの話し方(few-shot)をINITIALIZE時に注入し、
-                # 会話履歴の先頭でスタイルを確定させる(TALK時の注入だけでは最初の発話に反映されない)
+                # 会話履歴の先頭でスタイルを確定させる。TALK時の注入のみでは最初の発話に反映されないため
                 voice_note = build_voice_note(self.info.profile)
                 if voice_note:
                     parts.append(voice_note)
@@ -613,7 +622,9 @@ class Agent:
         if request == Request.DIVINE:
             seer_claimants = build_seer_priority_claimants(self.talk_history)
             guide = build_divine_guide(
-                name, self.get_alive_agents(), self._known_species,
+                name,
+                self.get_alive_agents(),
+                self._known_species,
                 talk_history=self.talk_history,
                 seer_claimants=seer_claimants,
             )
@@ -623,7 +634,9 @@ class Agent:
         if request == Request.GUARD:
             seer_claimants = build_seer_priority_claimants(self.talk_history)
             guard_guide = build_guard_guide(
-                name, self.get_alive_agents(), self.talk_history,
+                name,
+                self.get_alive_agents(),
+                self.talk_history,
                 seer_claimants=seer_claimants,
                 known_species=self._known_species,
             )
@@ -634,12 +647,16 @@ class Agent:
             attack_guide = build_werewolf_attack_guide(self.talk_history, name)
             if attack_guide:
                 prefix = f"{prefix}\n\n{attack_guide}" if prefix else attack_guide
-            # 襲撃時にSELF/STEER教訓を注入する(whisper合意の遵守・味方誤襲撃の禁止等)
+            # 襲撃時にSELFとSTEERの教訓を注入する。whisper合意の遵守や味方誤襲撃の禁止などが対象
             if bool(self._growth_config("review").get("enabled", True)):
                 player_count = len(self.info.status_map) if self.info else None
                 attack_lessons = load_lessons(
-                    self.role.value, player_count, tags=("SELF", "STEER"),
-                    situations=("ATTACK", "WHISPER", "GENERAL"), track=self.track)
+                    self.role.value,
+                    player_count,
+                    tags=("SELF", "STEER"),
+                    situations=("ATTACK", "WHISPER", "GENERAL"),
+                    track=self.track,
+                )
                 if attack_lessons:
                     prefix = f"{prefix}\n\n{attack_lessons}" if prefix else attack_lessons
         # 複数の占い師COがある場合、先制COを真とみなすヒューリスティックを注入する
@@ -651,23 +668,29 @@ class Agent:
         # 霊媒師(MEDIUM)のTALK時に、結果の開示と占い師主張との照合を促す
         if request == Request.TALK and self.role.value == "MEDIUM":
             medium_guide = build_medium_guide(
-                name, self.talk_history, self.known_results,
-                self._known_species, self.info,
+                name,
+                self.talk_history,
+                self.known_results,
+                self._known_species,
+                self.info,
             )
             if medium_guide:
                 prefix = f"{prefix}\n\n{medium_guide}" if prefix else medium_guide
         # 投票(VOTE)時にSELF/STEER教訓を注入する(Seerの白結果を尊重・Medium結果で対抗判定等)
-        if request == Request.VOTE:
-            if bool(self._growth_config("review").get("enabled", True)):
-                player_count = len(self.info.status_map) if self.info else None
-                # 終盤(生存者<=4)はENDGAME教訓を優先
-                alive_count = len(self.get_alive_agents())
-                vote_sits = ("ENDGAME", "VOTE", "COUNTER", "GENERAL") if alive_count <= 4 else ("VOTE", "COUNTER", "GENERAL")
-                vote_lessons = load_lessons(
-                    self.role.value, player_count, tags=("SELF", "STEER"),
-                    situations=vote_sits, track=self.track)
-                if vote_lessons:
-                    prefix = f"{prefix}\n\n{vote_lessons}" if prefix else vote_lessons
+        if request == Request.VOTE and bool(self._growth_config("review").get("enabled", True)):
+            player_count = len(self.info.status_map) if self.info else None
+            # 終盤(生存者が閾値以下)はENDGAME教訓を優先
+            alive_count = len(self.get_alive_agents())
+            vote_sits = (
+                ("ENDGAME", "VOTE", "COUNTER", "GENERAL")
+                if alive_count <= _ENDGAME_ALIVE_THRESHOLD
+                else ("VOTE", "COUNTER", "GENERAL")
+            )
+            vote_lessons = load_lessons(
+                self.role.value, player_count, tags=("SELF", "STEER"), situations=vote_sits, track=self.track
+            )
+            if vote_lessons:
+                prefix = f"{prefix}\n\n{vote_lessons}" if prefix else vote_lessons
         # 発話(TALK/WHISPER)では口に出す言葉だけを書かせる(対象選択は名前のみ返すので付けない)
         if request in (Request.TALK, Request.WHISPER):
             speech_note = get_speech_format_note()
@@ -689,10 +712,14 @@ class Agent:
                     talk_sits = ("WHISPER", "ATTACK", "GENERAL")
                 else:
                     alive_count = len(self.get_alive_agents())
-                    talk_sits = ("ENDGAME", "DEFENSE", "CO", "COUNTER", "VOTE", "GENERAL") if alive_count <= 4 else ("CO", "COUNTER", "DEFENSE", "VOTE", "GENERAL")
+                    talk_sits = (
+                        ("ENDGAME", "DEFENSE", "CO", "COUNTER", "VOTE", "GENERAL")
+                        if alive_count <= _ENDGAME_ALIVE_THRESHOLD
+                        else ("CO", "COUNTER", "DEFENSE", "VOTE", "GENERAL")
+                    )
                 steer_lessons = load_lessons(
-                    self.role.value, player_count, tags=("STEER", "PERSONA"),
-                    situations=talk_sits, track=self.track)
+                    self.role.value, player_count, tags=("STEER", "PERSONA"), situations=talk_sits, track=self.track
+                )
                 if steer_lessons:
                     prefix = f"{prefix}\n\n{steer_lessons}" if prefix else steer_lessons
         reads_others = request == Request.TALK or request in self._TARGET_REQUESTS
@@ -962,7 +989,7 @@ class Agent:
             self.llm_message_history.append(HumanMessage(content=prompt))
             self._trim_history()
             response = (self.llm_model | StrOutputParser()).invoke(self.llm_message_history)
-            response = self._strip_reasoning(response)
+            response = self._strip_reasoning(response) or ""
             if request in (Request.TALK, Request.WHISPER):
                 response = self._postprocess_speech(response)
             self.llm_message_history.append(AIMessage(content=response))
@@ -1013,7 +1040,7 @@ class Agent:
                     temperature=float(self.config["openai"]["temperature"]),
                     api_key=SecretStr(os.environ["OPENAI_API_KEY"]),
                     base_url=str(base_url) if base_url else None,
-                    max_tokens=max_tokens,
+                    max_tokens=max_tokens,  # type: ignore[call-arg]
                     extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}},
                 )
             case "google":

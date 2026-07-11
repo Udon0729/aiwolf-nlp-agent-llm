@@ -41,9 +41,7 @@ def _total_werewolves(setting: Setting | None, agent_count: int) -> int:
     role_num_map = getattr(setting, "role_num_map", None) if setting else None
     if role_num_map:
         try:
-            total = sum(
-                int(n) for r, n in dict(role_num_map).items() if _value(r) == _WEREWOLF_ROLE
-            )
+            total = sum(int(n) for r, n in dict(role_num_map).items() if _value(r) == _WEREWOLF_ROLE)
             if total > 0:
                 return total
         except (TypeError, ValueError):
@@ -127,14 +125,10 @@ def build_situation(
     total_wolves = _total_werewolves(setting, len(info.status_map))
 
     dead = {k for k, v in info.status_map.items() if _value(v) != "ALIVE"}
-    known_dead_wolves = sum(
-        1 for target, sp in known_species.items() if sp == _WEREWOLF_ROLE and target in dead
-    )
+    known_dead_wolves = sum(1 for target, sp in known_species.items() if sp == _WEREWOLF_ROLE and target in dead)
     wolves_alive_max = max(0, total_wolves - known_dead_wolves)
 
-    confirmed_wolves = [
-        t for t, sp in known_species.items() if sp == _WEREWOLF_ROLE and t in alive_set
-    ]
+    confirmed_wolves = [t for t, sp in known_species.items() if sp == _WEREWOLF_ROLE and t in alive_set]
     confirmed_humans = [t for t, sp in known_species.items() if sp == "HUMAN" and t in alive_set]
     grey = [n for n in alive if n != agent_name and n not in known_species]
 

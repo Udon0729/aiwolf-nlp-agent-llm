@@ -157,13 +157,15 @@ def _scan(roots: list[Path]) -> list[dict]:
                     continue
                 feat = _classify(seq)
                 kind = _kind(traits.sensitivity, suppression=traits.suppression)
-                records.append({
-                    "agent": agent_match.group(1),
-                    "kind": kind,
-                    "seq": seq,
-                    "match": _matches(kind, feat),
-                    **feat,
-                })
+                records.append(
+                    {
+                        "agent": agent_match.group(1),
+                        "kind": kind,
+                        "seq": seq,
+                        "match": _matches(kind, feat),
+                        **feat,
+                    }
+                )
     return records
 
 

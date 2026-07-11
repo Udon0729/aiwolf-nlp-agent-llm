@@ -68,7 +68,9 @@ def load_common_norms() -> str:
 
 
 def load_role_skill(
-    role_value: str, player_count: int | None, track: str = "turn",
+    role_value: str,
+    player_count: int | None,
+    track: str = "turn",
 ) -> str:
     """Load the role- and game-size-specific strategy skill.
 
