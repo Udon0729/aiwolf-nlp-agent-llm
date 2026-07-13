@@ -90,13 +90,12 @@ class BeliefTracker:
             self._records[name] = PlayerRecord()
         return self._records[name]
 
-    def update(self, info: Info | None, talk_history: list[Talk]) -> None:
-        """Ingest new talks and vote results since last update.
+    def _ingest_talks(self, talk_history: list[Talk]) -> None:
+        """Ingest new talks since last update.
 
-        前回以降の新しい発言と投票結果を取り込む.
+        前回以降の新しい発言を取り込む.
 
         Args:
-            info (Info | None): Current game info / 現在のゲーム情報
             talk_history (list[Talk]): Talk history / トーク履歴
         """
         for talk in talk_history:
@@ -114,6 +113,14 @@ class BeliefTracker:
         if talk_history:
             self._last_talk_idx = max(t.idx for t in talk_history)
 
+    def _ingest_votes(self, info: Info | None) -> None:
+        """Ingest new vote results since last update.
+
+        前回以降の新しい投票結果を取り込む.
+
+        Args:
+            info (Info | None): Current game info / 現在のゲーム情報
+        """
         if info is None:
             return
         if info.day != self._last_vote_day and info.vote_list:
@@ -125,6 +132,18 @@ class BeliefTracker:
                 rec.vote_targets.append(vote.target)
                 if len(rec.vote_targets) > _MAX_VOTES_PER_PLAYER:
                     rec.vote_targets = rec.vote_targets[-_MAX_VOTES_PER_PLAYER:]
+
+    def update(self, info: Info | None, talk_history: list[Talk]) -> None:
+        """Ingest new talks and vote results since last update.
+
+        前回以降の新しい発言と投票結果を取り込む.
+
+        Args:
+            info (Info | None): Current game info / 現在のゲーム情報
+            talk_history (list[Talk]): Talk history / トーク履歴
+        """
+        self._ingest_talks(talk_history)
+        self._ingest_votes(info)
 
     def build_belief_summary(self, alive: set[str]) -> str:
         """Build a prompt block summarising accumulated observations.

@@ -23,6 +23,8 @@ from langchain_core.messages import HumanMessage
 from langchain_core.output_parsers import StrOutputParser
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from aiwolf_nlp_common.packet import Info
     from langchain_core.language_models.chat_models import BaseChatModel
 
@@ -480,6 +482,116 @@ def _extract_situation(line: str) -> str:
     return m.group(1) if m else "GENERAL"
 
 
+def _filter_valid_lines(lines: list[str]) -> list[str]:
+    """Keep only lines whose body is long enough and not heading-shaped.
+
+    本文が短すぎる行・見出しっぽい行を除いた, 有効な教訓行のみを残す.
+
+    Args:
+        lines (list[str]): Raw lesson lines to filter / 絞り込み対象の生の教訓行
+
+    Returns:
+        list[str]: Valid lesson lines (original lines, tags intact) /
+            有効な教訓行(タグを含む元の行そのまま)
+    """
+    valid: list[str] = []
+    for line in lines:
+        body = _strip_tag(_lesson_body(line))
+        if len(body) < _MIN_LESSON_LENGTH or _HEADING_PATTERN.search(body):
+            continue
+        valid.append(line)
+    return valid
+
+
+def _select_matching(
+    pool: list[str],
+    predicate: Callable[[str], bool],
+    budget: int,
+    result: list[str],
+    selected_bodies: list[str],
+) -> None:
+    """Scan pool newest-first, appending predicate-matching non-duplicate lines to result.
+
+    poolを新しい順に走査し, predicateに一致しbudget以内かつ非重複な行をresultへ
+    追加する. `_select_lessons`の状況指定時の3パス(状況一致→GENERAL→残り)に共通する
+    反復ロジック(reversed pool走査+budget判定+重複判定+追加)を, predicateだけ
+    差し替えて共有するためのヘルパー. result と selected_bodies はこの場で直接
+    変更する. 重複判定は selected_bodies に加え, この呼び出し中にresultへ追加済みの
+    行の本文(状況タグ除去済み)も対象に含める(3パス共通の挙動).
+
+    Args:
+        pool (list[str]): Candidate lesson lines, oldest first /
+            候補の教訓行(古い順)
+        predicate (Callable[[str], bool]): Line filter for this pass /
+            このパスにおける行の絞り込み条件
+        budget (int): Max number of lines this call may add to result /
+            この呼び出しでresultへ追加できる最大行数
+        result (list[str]): Accumulator of selected lines (mutated in place) /
+            選出済みの行の蓄積(この場で変更する)
+        selected_bodies (list[str]): Accumulator of already-selected lesson bodies,
+            used for dedup and shared across passes/pools (mutated in place) /
+            重複判定用の既選出本文の蓄積. パス・プール間で共有され, この場で変更する
+    """
+    for line in reversed(pool):
+        if len(result) >= budget:
+            break
+        if not predicate(line):
+            continue
+        body = _strip_tag(_lesson_body(line))
+        if _is_near_duplicate(body, selected_bodies + [strip_tag_for_dedup(r) for r in result]):
+            continue
+        result.append(line)
+        selected_bodies.append(body)
+
+
+def _select_lessons(
+    pool: list[str],
+    budget: int,
+    selected_bodies: list[str],
+    sit_set: set[str] | None,
+) -> list[str]:
+    """Select up to budget lessons from pool, prioritizing situation matches.
+
+    budget件を上限にpoolから教訓を選ぶ. sit_set指定時は状況一致→GENERAL→残りの
+    3パスで優先選択し, 指定なしの場合は従来通り最新順に選ぶ.
+
+    Args:
+        pool (list[str]): Candidate lesson lines for one outcome (win/loss),
+            oldest first / 1つの勝敗側の候補教訓行(古い順)
+        budget (int): Max number of lines to select / 選択できる最大行数
+        selected_bodies (list[str]): Accumulator of already-selected lesson
+            bodies across both outcome pools, used for dedup (mutated in
+            place) / 両方の勝敗プールを通じた既選出本文の蓄積(重複判定用.
+            この場で変更する)
+        sit_set (set[str] | None): Upper-cased situation tags to prioritize,
+            or None if no situation was specified /
+            優先する状況タグの集合(大文字). 状況指定なしの場合は None
+
+    Returns:
+        list[str]: Selected lesson lines, in selection (newest-first) order /
+            選出された教訓行(選択順=新しい順)
+    """
+    result: list[str] = []
+    if sit_set:
+        # 1st pass: situation-matched lessons (newest first)
+        _select_matching(pool, lambda line: _extract_situation(line) in sit_set, budget, result, selected_bodies)
+        # 2nd pass: GENERAL lessons (newest first)
+        _select_matching(pool, lambda line: _extract_situation(line) == "GENERAL", budget, result, selected_bodies)
+        # 3rd pass: any remaining (newest first)
+        _select_matching(pool, lambda line: line not in result, budget, result, selected_bodies)
+    else:
+        # 状況タグ指定がない場合は従来通り最新順に選ぶ
+        for line in reversed(pool):
+            if len(result) >= budget:
+                break
+            body = _strip_tag(_lesson_body(line))
+            if _is_near_duplicate(body, selected_bodies):
+                continue
+            result.append(line)
+            selected_bodies.append(body)
+    return result
+
+
 def load_lessons(
     role_value: str,
     player_count: int | None,
@@ -526,12 +638,7 @@ def load_lessons(
         lines = [line for line in lines if _extract_tag(_lesson_body(line)) in tag_set]
         if not lines:
             return ""
-    valid: list[str] = []
-    for line in lines:
-        body = _strip_tag(_lesson_body(line))
-        if len(body) < _MIN_LESSON_LENGTH or _HEADING_PATTERN.search(body):
-            continue
-        valid.append(line)
+    valid = _filter_valid_lines(lines)
     losses = [line for line in valid if _extract_outcome(line) == lose_label]
     wins = [line for line in valid if line not in losses]
 
@@ -539,66 +646,17 @@ def load_lessons(
     # 不足分は GENERAL で補充する
     sit_set = {s.upper() for s in situations} if situations else None
 
-    def _select_lessons(pool: list[str], budget: int, selected_bodies: list[str]) -> list[str]:
-        """Select up to budget lessons from pool, prioritizing situation matches."""
-        result: list[str] = []
-        if sit_set:
-            # 1st pass: situation-matched lessons (newest first)
-            for line in reversed(pool):
-                if len(result) >= budget:
-                    break
-                sit = _extract_situation(line)
-                if sit in sit_set:
-                    body = _strip_tag(_lesson_body(line))
-                    if _is_near_duplicate(body, selected_bodies + [strip_tag_for_dedup(r) for r in result]):
-                        continue
-                    result.append(line)
-                    selected_bodies.append(body)
-            # 2nd pass: GENERAL lessons (newest first)
-            for line in reversed(pool):
-                if len(result) >= budget:
-                    break
-                sit = _extract_situation(line)
-                if sit == "GENERAL":
-                    body = _strip_tag(_lesson_body(line))
-                    if _is_near_duplicate(body, selected_bodies + [strip_tag_for_dedup(r) for r in result]):
-                        continue
-                    result.append(line)
-                    selected_bodies.append(body)
-            # 3rd pass: any remaining (newest first)
-            for line in reversed(pool):
-                if len(result) >= budget:
-                    break
-                if line in result:
-                    continue
-                body = _strip_tag(_lesson_body(line))
-                if _is_near_duplicate(body, selected_bodies + [strip_tag_for_dedup(r) for r in result]):
-                    continue
-                result.append(line)
-                selected_bodies.append(body)
-        else:
-            # 状況タグ指定がない場合は従来通り最新順に選ぶ
-            for line in reversed(pool):
-                if len(result) >= budget:
-                    break
-                body = _strip_tag(_lesson_body(line))
-                if _is_near_duplicate(body, selected_bodies):
-                    continue
-                result.append(line)
-                selected_bodies.append(body)
-        return result
-
     # LessonL方式: 正(勝利)と負(敗北)の教訓を半分ずつ選択する.
     half = _MAX_LESSONS_LINES // 2
     selected_bodies: list[str] = []
     selected_lines: list[str] = []
 
     # 敗北の教訓を半分選ぶ
-    selected_lines.extend(_select_lessons(losses, half, selected_bodies))
+    selected_lines.extend(_select_lessons(losses, half, selected_bodies, sit_set))
     # 勝利の教訓を残り枠選ぶ
     remaining = _MAX_LESSONS_LINES - len(selected_lines)
     if remaining > 0:
-        selected_lines.extend(_select_lessons(wins, remaining, selected_bodies))
+        selected_lines.extend(_select_lessons(wins, remaining, selected_bodies, sit_set))
 
     selected_lines.reverse()
     if not selected_lines:

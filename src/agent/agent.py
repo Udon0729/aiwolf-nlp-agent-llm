@@ -615,10 +615,51 @@ class Agent:
             )
             if rule_block:
                 prefix = f"{prefix}\n\n{rule_block}" if prefix else rule_block
+        prefix = self._apply_target_self_exclusion(prefix, request, name)
+        prefix = self._apply_divine_guide(prefix, request, name)
+        prefix = self._apply_guard_guide(prefix, request, name)
+        prefix = self._apply_attack_guide_and_lessons(prefix, request, name)
+        prefix = self._apply_seer_priority_note(prefix, request, name)
+        prefix = self._apply_medium_guide(prefix, request, name)
+        prefix = self._apply_vote_lessons(prefix, request)
+        prefix = self._apply_speech_blocks(prefix, request, name)
+        reads_others = request == Request.TALK or request in self._TARGET_REQUESTS
+        prefix = self._apply_belief_and_reading_blocks(prefix, reads_others=reads_others, name=name)
+        return self._append_emotion_blocks(prefix, reads_others=reads_others)
+
+    def _apply_target_self_exclusion(self, prefix: str, request: Request | None, name: str) -> str:
+        """Append the self-exclusion note for target-selection requests.
+
+        対象選択リクエストに自己除外の注意書きを付加する.
+
+        Args:
+            prefix (str): The prefix built so far / これまでに組み立てた前置文
+            request (Request | None): The request type / リクエストタイプ
+            name (str): The agent's in-game name / ゲーム内のエージェント名
+
+        Returns:
+            str: The prefix with the note appended / 注意書きを付加した前置文
+        """
         if request in self._TARGET_REQUESTS:
             note = build_target_self_exclusion(name)
             prefix = f"{prefix}\n\n{note}" if prefix else note
-        # 占い(DIVINE)は確定済みを再占いせず灰を優先させる(評価D: 行動を状況に基づかせる)
+        return prefix
+
+    def _apply_divine_guide(self, prefix: str, request: Request | None, name: str) -> str:
+        """Append the Seer's divine-target guidance for a DIVINE request.
+
+        占い(DIVINE)リクエストに占い先ガイドを付加する.
+
+        確定済みを再占いせず灰を優先させる(評価D: 行動を状況に基づかせる).
+
+        Args:
+            prefix (str): The prefix built so far / これまでに組み立てた前置文
+            request (Request | None): The request type / リクエストタイプ
+            name (str): The agent's in-game name / ゲーム内のエージェント名
+
+        Returns:
+            str: The prefix with the guide appended / ガイドを付加した前置文
+        """
         if request == Request.DIVINE:
             seer_claimants = build_seer_priority_claimants(self.talk_history)
             guide = build_divine_guide(
@@ -630,7 +671,23 @@ class Agent:
             )
             if guide:
                 prefix = f"{prefix}\n\n{guide}" if prefix else guide
-        # 護衛(GUARD)は占い師(先制CO)・確定白・霊媒師を優先護衛するよう誘導する
+        return prefix
+
+    def _apply_guard_guide(self, prefix: str, request: Request | None, name: str) -> str:
+        """Append the Bodyguard's guard-target guidance for a GUARD request.
+
+        護衛(GUARD)リクエストに護衛先ガイドを付加する.
+
+        占い師(先制CO)・確定白・霊媒師を優先護衛するよう誘導する.
+
+        Args:
+            prefix (str): The prefix built so far / これまでに組み立てた前置文
+            request (Request | None): The request type / リクエストタイプ
+            name (str): The agent's in-game name / ゲーム内のエージェント名
+
+        Returns:
+            str: The prefix with the guide appended / ガイドを付加した前置文
+        """
         if request == Request.GUARD:
             seer_claimants = build_seer_priority_claimants(self.talk_history)
             guard_guide = build_guard_guide(
@@ -642,7 +699,24 @@ class Agent:
             )
             if guard_guide:
                 prefix = f"{prefix}\n\n{guard_guide}" if prefix else guard_guide
-        # 襲撃(ATTACK)は味方(狂人の可能性)を誤襲撃しないよう誘導する
+        return prefix
+
+    def _apply_attack_guide_and_lessons(self, prefix: str, request: Request | None, name: str) -> str:
+        """Append the werewolf's attack-avoidance guide and SELF/STEER lessons for ATTACK.
+
+        襲撃(ATTACK)リクエストに誤襲撃回避ガイドとSELF/STEER教訓を付加する.
+
+        味方(狂人の可能性)を誤襲撃しないよう誘導し, whisper合意の遵守や味方誤襲撃の
+        禁止などの教訓を注入する.
+
+        Args:
+            prefix (str): The prefix built so far / これまでに組み立てた前置文
+            request (Request | None): The request type / リクエストタイプ
+            name (str): The agent's in-game name / ゲーム内のエージェント名
+
+        Returns:
+            str: The prefix with the guide/lessons appended / ガイド・教訓を付加した前置文
+        """
         if request == Request.ATTACK:
             attack_guide = build_werewolf_attack_guide(self.talk_history, name)
             if attack_guide:
@@ -659,13 +733,43 @@ class Agent:
                 )
                 if attack_lessons:
                     prefix = f"{prefix}\n\n{attack_lessons}" if prefix else attack_lessons
-        # 複数の占い師COがある場合、先制COを真とみなすヒューリスティックを注入する
-        # 発話(TALK)と投票(VOTE)で機能する(占い師本人には対抗への対処を促す)
+        return prefix
+
+    def _apply_seer_priority_note(self, prefix: str, request: Request | None, name: str) -> str:
+        """Append the Seer-priority credibility note for TALK/VOTE requests.
+
+        発話(TALK)・投票(VOTE)リクエストに占い師優先の信頼性注記を付加する.
+
+        複数の占い師COがある場合、先制COを真とみなすヒューリスティックを注入する
+        (占い師本人には対抗への対処を促す).
+
+        Args:
+            prefix (str): The prefix built so far / これまでに組み立てた前置文
+            request (Request | None): The request type / リクエストタイプ
+            name (str): The agent's in-game name / ゲーム内のエージェント名
+
+        Returns:
+            str: The prefix with the note appended / 注記を付加した前置文
+        """
         if request in (Request.TALK, Request.VOTE):
             seer_note = build_seer_priority(self.talk_history, name, self.role.value)
             if seer_note:
                 prefix = f"{prefix}\n\n{seer_note}" if prefix else seer_note
-        # 霊媒師(MEDIUM)のTALK時に、結果の開示と占い師主張との照合を促す
+        return prefix
+
+    def _apply_medium_guide(self, prefix: str, request: Request | None, name: str) -> str:
+        """Append the Medium's disclosure guidance for a MEDIUM TALK request.
+
+        霊媒師(MEDIUM)のTALK時に結果の開示と占い師主張との照合を促すガイドを付加する.
+
+        Args:
+            prefix (str): The prefix built so far / これまでに組み立てた前置文
+            request (Request | None): The request type / リクエストタイプ
+            name (str): The agent's in-game name / ゲーム内のエージェント名
+
+        Returns:
+            str: The prefix with the guide appended / ガイドを付加した前置文
+        """
         if request == Request.TALK and self.role.value == "MEDIUM":
             medium_guide = build_medium_guide(
                 name,
@@ -676,7 +780,23 @@ class Agent:
             )
             if medium_guide:
                 prefix = f"{prefix}\n\n{medium_guide}" if prefix else medium_guide
-        # 投票(VOTE)時にSELF/STEER教訓を注入する(Seerの白結果を尊重・Medium結果で対抗判定等)
+        return prefix
+
+    def _apply_vote_lessons(self, prefix: str, request: Request | None) -> str:
+        """Append SELF/STEER lessons for a VOTE request.
+
+        投票(VOTE)リクエストにSELF/STEER教訓を付加する.
+
+        Seerの白結果を尊重・Medium結果で対抗判定等を促す. 終盤(生存者が閾値以下)は
+        ENDGAME教訓を優先する.
+
+        Args:
+            prefix (str): The prefix built so far / これまでに組み立てた前置文
+            request (Request | None): The request type / リクエストタイプ
+
+        Returns:
+            str: The prefix with the lessons appended / 教訓を付加した前置文
+        """
         if request == Request.VOTE and bool(self._growth_config("review").get("enabled", True)):
             player_count = len(self.info.status_map) if self.info else None
             # 終盤(生存者が閾値以下)はENDGAME教訓を優先
@@ -691,7 +811,23 @@ class Agent:
             )
             if vote_lessons:
                 prefix = f"{prefix}\n\n{vote_lessons}" if prefix else vote_lessons
-        # 発話(TALK/WHISPER)では口に出す言葉だけを書かせる(対象選択は名前のみ返すので付けない)
+        return prefix
+
+    def _apply_speech_blocks(self, prefix: str, request: Request | None, name: str) -> str:
+        """Append speech-format, voice, repetition-guard, and STEER/PERSONA blocks.
+
+        発話(TALK/WHISPER)に発話形式注意・声ガイド・反復ガード・STEER/PERSONA教訓を付加する.
+
+        口に出す言葉だけを書かせる(対象選択は名前のみ返すので付けない).
+
+        Args:
+            prefix (str): The prefix built so far / これまでに組み立てた前置文
+            request (Request | None): The request type / リクエストタイプ
+            name (str): The agent's in-game name / ゲーム内のエージェント名
+
+        Returns:
+            str: The prefix with the blocks appended / ブロックを付加した前置文
+        """
         if request in (Request.TALK, Request.WHISPER):
             speech_note = get_speech_format_note()
             prefix = f"{prefix}\n\n{speech_note}" if prefix else speech_note
@@ -722,7 +858,22 @@ class Agent:
                 )
                 if steer_lessons:
                     prefix = f"{prefix}\n\n{steer_lessons}" if prefix else steer_lessons
-        reads_others = request == Request.TALK or request in self._TARGET_REQUESTS
+        return prefix
+
+    def _apply_belief_and_reading_blocks(self, prefix: str, *, reads_others: bool, name: str) -> str:
+        """Append accumulated belief and emotional-tell reading blocks.
+
+        蓄積された他者の行動パターンと感情のテル読みのブロックを付加する.
+
+        Args:
+            prefix (str): The prefix built so far / これまでに組み立てた前置文
+            reads_others (bool): Whether this is a speech or target request /
+                発言または対象選択のリクエストか
+            name (str): The agent's in-game name / ゲーム内のエージェント名
+
+        Returns:
+            str: The prefix with the blocks appended / ブロックを付加した前置文
+        """
         # 蓄積された他者の行動パターンを注入する
         if reads_others and self.belief_tracker is not None:
             alive_set = set(self.get_alive_agents())
@@ -734,7 +885,7 @@ class Agent:
             read_block = build_tell_reading(self.info, name, self.talk_history)
             if read_block:
                 prefix = f"{prefix}\n\n{read_block}" if prefix else read_block
-        return self._append_emotion_blocks(prefix, reads_others=reads_others)
+        return prefix
 
     def _append_emotion_blocks(self, prefix: str, *, reads_others: bool) -> str:
         """Append affect leakage and decision-gating blocks to the prefix.

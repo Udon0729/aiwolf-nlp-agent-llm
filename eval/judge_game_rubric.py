@@ -290,16 +290,20 @@ def _judge(name: str, profile: str, role: str, transcript: str) -> dict[str, int
     return scores if all(item in scores for item in _ITEMS) else None
 
 
-def main() -> None:
-    """Score every agent in every game of each condition and report averages.
+def _build_jobs(conditions: list[Path]) -> list[tuple[str, str, str, str, str, int]]:
+    """Collect scoring jobs for every speaking agent in every condition's games.
 
-    各条件の全ゲーム・全エージェントを採点し, 項目別平均を報告する.
+    各条件のゲーム記録から, 発話しているエージェントの採点対象一覧を組み立てる.
+
+    副作用: 条件ごとのゲーム数を`print(..., flush=True)`で表示する。
+
+    Args:
+        conditions (list[Path]): Condition log directories from argv / argvの条件ログdir一覧
+
+    Returns:
+        list[tuple[str, str, str, str, str, int]]: Jobs as (条件名, キャラ名, プロフィール,
+            役職, 会話記録, 参加人数) の6つ組の並び
     """
-    conditions = [Path(a) for a in sys.argv[1:]]
-    if not conditions:
-        print("使い方: uv run python eval/judge_game_rubric.py <ログdir> [<ログdir> ...]")
-        sys.exit(1)
-
     # 各要素は 条件・キャラ名・プロフィール・役職・記録・参加人数 の6つ組
     jobs: list[tuple[str, str, str, str, str, int]] = []
     for cond_dir in conditions:
@@ -314,19 +318,60 @@ def main() -> None:
                 if name in speakers:
                     role = role_map.get(name, "不明")
                     jobs.append((cond_dir.name, name, profile, role, transcript, player_count))
+    return jobs
 
-    def run(job: tuple[str, str, str, str, str, int]) -> tuple[str, dict[str, int], int | None] | None:
-        cond, name, profile, role, transcript, player_count = job
-        scores = _judge(name, profile, role, transcript)
-        if not scores:
-            return None
-        skill_text = _load_skill_text(role, player_count)
-        instr_score = _judge_instruction_adherence(name, role, skill_text, transcript)
-        return (cond, scores, instr_score)
 
+def _run_one_job(job: tuple[str, str, str, str, str, int]) -> tuple[str, dict[str, int], int | None] | None:
+    """Score one job's rubric items and instruction adherence.
+
+    1件のジョブについてルーブリック項目と指示遵守を採点する.
+
+    Args:
+        job (tuple[str, str, str, str, str, int]): (条件名, キャラ名, プロフィール, 役職,
+            会話記録, 参加人数) の6つ組
+
+    Returns:
+        tuple[str, dict[str, int], int | None] | None: (条件名, 項目別得点, 指示遵守得点)、
+            ルーブリック採点に失敗した場合は None
+    """
+    cond, name, profile, role, transcript, player_count = job
+    scores = _judge(name, profile, role, transcript)
+    if not scores:
+        return None
+    skill_text = _load_skill_text(role, player_count)
+    instr_score = _judge_instruction_adherence(name, role, skill_text, transcript)
+    return (cond, scores, instr_score)
+
+
+def _run_jobs(jobs: list[tuple[str, str, str, str, str, int]]) -> list[tuple[str, dict[str, int], int | None]]:
+    """Run all jobs concurrently and keep only the successful results.
+
+    全ジョブを並列実行し, 成功したものだけ集める.
+
+    Args:
+        jobs (list[tuple[str, str, str, str, str, int]]): Jobs from `_build_jobs` /
+            `_build_jobs`が返したジョブ一覧
+
+    Returns:
+        list[tuple[str, dict[str, int], int | None]]: Successful results / 成功した結果一覧
+    """
     with ThreadPoolExecutor(max_workers=_CONCURRENCY) as pool:
-        results = [r for r in pool.map(run, jobs) if r]
+        return [r for r in pool.map(_run_one_job, jobs) if r]
 
+
+def _print_rubric_report(
+    conditions: list[Path],
+    results: list[tuple[str, dict[str, int], int | None]],
+) -> None:
+    """Print the per-condition rubric-item averages table.
+
+    条件ごとのルーブリック項目別平均を表で表示する.
+
+    Args:
+        conditions (list[Path]): Condition log directories in argv order / argv順の条件一覧
+        results (list[tuple[str, dict[str, int], int | None]]): Results from `_run_jobs` /
+            `_run_jobs`の結果
+    """
     print(f"\n===== INLG 2026 準拠ルーブリック採点 (審査対象 {len(results)}体) =====")
     header = "".join(f"{item:>7}" for item in _ITEMS)
     print(f"{'条件':<22}{'N':>4}{header}{'総合':>7}")
@@ -339,8 +384,22 @@ def main() -> None:
         cells = "".join(f"{avgs[item]:>7.2f}" for item in _ITEMS)
         print(f"{cond_dir.name:<22}{len(rows):>4}{cells}{total:>7.2f}")
 
-    # 指示遵守軸(大会非公式・内部診断用)。A〜Fとは別集計にし, 大会公式ルーブリックの
-    # 数値(ADR-003)と混同しないよう明示的に分けて表示する。
+
+def _print_instruction_report(
+    conditions: list[Path],
+    results: list[tuple[str, dict[str, int], int | None]],
+) -> None:
+    """Print the per-condition instruction-adherence averages table.
+
+    条件ごとの指示遵守平均を表で表示する(大会非公式・内部診断用, ADR-014).
+    A〜Fとは別集計にし, 大会公式ルーブリックの数値(ADR-003)と混同しないよう
+    明示的に分けて表示する。
+
+    Args:
+        conditions (list[Path]): Condition log directories in argv order / argv順の条件一覧
+        results (list[tuple[str, dict[str, int], int | None]]): Results from `_run_jobs` /
+            `_run_jobs`の結果
+    """
     print("\n===== 指示遵守(内部診断・大会非公式, ADR-014) =====")
     print(f"{'条件':<22}{'N':>4}{'指示遵守':>10}")
     for cond_dir in conditions:
@@ -349,6 +408,22 @@ def main() -> None:
             print(f"{cond_dir.name:<22}{'-':>4}{'測定不可':>10}")
             continue
         print(f"{cond_dir.name:<22}{len(instr_scores):>4}{mean(instr_scores):>10.2f}")
+
+
+def main() -> None:
+    """Score every agent in every game of each condition and report averages.
+
+    各条件の全ゲーム・全エージェントを採点し, 項目別平均を報告する.
+    """
+    conditions = [Path(a) for a in sys.argv[1:]]
+    if not conditions:
+        print("使い方: uv run python eval/judge_game_rubric.py <ログdir> [<ログdir> ...]")
+        sys.exit(1)
+
+    jobs = _build_jobs(conditions)
+    results = _run_jobs(jobs)
+    _print_rubric_report(conditions, results)
+    _print_instruction_report(conditions, results)
 
 
 if __name__ == "__main__":

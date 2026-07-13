@@ -299,6 +299,94 @@ def build_target_self_exclusion(agent_name: str) -> str:
 _AGGRESSIVE_KEYWORD_MIN_HITS = 2
 
 
+def _find_quiet_players(talk_history: list[Talk], grey: list[str]) -> list[str]:
+    """Return grey players who have spoken at or below the game's quiet threshold.
+
+    発言数が少ない(沈黙気味の)灰の生存者を返す。閾値は全生存者(灰以外・自分の
+    発言も含む)の平均発言数から算出する(現状のロジックそのまま抽出)。
+
+    Args:
+        talk_history (list[Talk]): Talk history of the game / ゲームのトーク履歴
+        grey (list[str]): Grey (unconfirmed) living players / 灰(未確定)の生存者
+
+    Returns:
+        list[str]: Grey players at or below the quiet threshold, in `grey` order /
+            閾値以下の発言数の灰の生存者(greyの順序を維持)
+    """
+    talk_counts: dict[str, int] = {}
+    for talk in talk_history:
+        if talk.skip or not talk.text:
+            continue
+        talk_counts[talk.agent] = talk_counts.get(talk.agent, 0) + 1
+    avg_talks = sum(talk_counts.values()) / max(len(talk_counts), 1)
+    quiet_threshold = max(1, int(avg_talks * 0.5))
+    return [a for a in grey if talk_counts.get(a, 0) <= quiet_threshold]
+
+
+def _find_aggressive_players(talk_history: list[Talk], grey: list[str], agent_name: str) -> list[str]:
+    """Return grey players (other than self) whose talk is aggressively accusatory.
+
+    他者を激しく攻撃している灰の生存者(自分は除く)を発話順に(重複無く)返す
+    (現状のロジックそのまま抽出。"werewolf"は"wolf"にも部分一致し, 1発話で
+    複数ヒットし得るキーワード判定方式を変えない)。
+
+    Args:
+        talk_history (list[Talk]): Talk history of the game / ゲームのトーク履歴
+        grey (list[str]): Grey (unconfirmed) living players / 灰(未確定)の生存者
+        agent_name (str): The agent's own in-game name (excluded from detection) /
+            自分自身のゲーム内名(検出から除外)
+
+    Returns:
+        list[str]: Aggressive grey players, in talk order / 攻撃的な灰の生存者(発話順)
+    """
+    aggressive_players: list[str] = []
+    attack_keywords = ("wolf", "werewolf", "liar", "lying", "fake", "suspicious", "vote")
+    for talk in talk_history:
+        if talk.skip or not talk.text or talk.agent == agent_name or talk.agent not in grey:
+            continue
+        lowered = talk.text.lower()
+        attack_count = sum(1 for kw in attack_keywords if kw in lowered)
+        if attack_count >= _AGGRESSIVE_KEYWORD_MIN_HITS and talk.agent not in aggressive_players:
+            aggressive_players.append(talk.agent)
+    return aggressive_players
+
+
+def _build_divine_priority(
+    counter_claimants: list[str],
+    aggressive_players: list[str],
+    quiet_players: list[str],
+    grey: list[str],
+) -> list[str]:
+    """Build the divine priority list: counter-claimants, aggressive, quiet, rest.
+
+    占い優先順位リストを, 対抗CO者 > 攻撃的な発言者 > 沈黙気味の者 > 残りの灰、の
+    順で重複無く組み立てる(既存の優先順位ロジックをそのまま抽出したもの)。
+
+    Args:
+        counter_claimants (list[str]): Seer counter-claimants among grey /
+            灰の中の占い師対抗CO者
+        aggressive_players (list[str]): Aggressive grey players / 攻撃的な灰の生存者
+        quiet_players (list[str]): Quiet grey players / 沈黙気味の灰の生存者
+        grey (list[str]): Grey (unconfirmed) living players / 灰(未確定)の生存者
+
+    Returns:
+        list[str]: Priority-ordered grey players / 優先順位付けされた灰のリスト
+    """
+    priority: list[str] = []
+    for c in counter_claimants:
+        if c not in priority:
+            priority.append(c)
+    for a in aggressive_players:
+        if a not in priority:
+            priority.append(a)
+    for q in quiet_players:
+        if q not in priority:
+            priority.append(q)
+    remaining_grey = [g for g in grey if g not in priority]
+    priority.extend(remaining_grey)
+    return priority
+
+
 def build_divine_guide(
     agent_name: str,
     alive: list[str],
@@ -339,37 +427,11 @@ def build_divine_guide(
     # 1. 対抗CO者(自分以外のSeer CO者)は偽占い師=狂人or人狼の可能性
     counter_claimants = [c for c in seer_claimants if c != agent_name and c in grey]
     # 2. 発言数が少ない(沈黙気味の)生存者 — 閾値は生存者数に応じて調整
-    talk_counts: dict[str, int] = {}
-    for talk in talk_history:
-        if talk.skip or not talk.text:
-            continue
-        talk_counts[talk.agent] = talk_counts.get(talk.agent, 0) + 1
-    avg_talks = sum(talk_counts.values()) / max(len(talk_counts), 1)
-    quiet_threshold = max(1, int(avg_talks * 0.5))
-    quiet_players = [a for a in grey if talk_counts.get(a, 0) <= quiet_threshold]
+    quiet_players = _find_quiet_players(talk_history, grey)
     # 3. 他者を激しく攻撃している者(人狼が注意を逸らすための扇動の可能性)
-    aggressive_players: list[str] = []
-    attack_keywords = ("wolf", "werewolf", "liar", "lying", "fake", "suspicious", "vote")
-    for talk in talk_history:
-        if talk.skip or not talk.text or talk.agent == agent_name or talk.agent not in grey:
-            continue
-        lowered = talk.text.lower()
-        attack_count = sum(1 for kw in attack_keywords if kw in lowered)
-        if attack_count >= _AGGRESSIVE_KEYWORD_MIN_HITS and talk.agent not in aggressive_players:
-            aggressive_players.append(talk.agent)
+    aggressive_players = _find_aggressive_players(talk_history, grey, agent_name)
     # 4. 優先度順に候補を組み立てる
-    priority: list[str] = []
-    for c in counter_claimants:
-        if c not in priority:
-            priority.append(c)
-    for a in aggressive_players:
-        if a not in priority:
-            priority.append(a)
-    for q in quiet_players:
-        if q not in priority:
-            priority.append(q)
-    remaining_grey = [g for g in grey if g not in priority]
-    priority.extend(remaining_grey)
+    priority = _build_divine_priority(counter_claimants, aggressive_players, quiet_players, grey)
 
     # 優先候補と理由を明示する注記をここから組み立てる
     lines = [t.GROUNDING_DIVINE_GUIDE.format(grey=", ".join(grey))]
@@ -461,6 +523,55 @@ def build_seer_priority(
     return texts.get().GROUNDING_SEER_PRIORITY
 
 
+# 誰かを名指しで非難しているとみなすキーワード群. werewolfの誤襲撃回避ヒューリスティック
+# 専用の定数. 役割が異なるため他の関数の攻撃的発言判定とは共有せず独立に保持する
+_ATTACK_GUIDE_ACCUSATION_KEYWORDS = (
+    "wolf",
+    "werewolf",
+    "suspicious",
+    "liar",
+    "lying",
+    "fake",
+    "vote",
+)
+
+
+def _detect_attackers_of(
+    talk_history: list[Talk],
+    target_names_lower: list[str],
+    exclude_agent: str,
+) -> list[str]:
+    """Return speakers (in talk order) who accuse any of the given targets.
+
+    talk_historyを発話順に走査し, target_names_lowerのいずれか(小文字化済みの
+    名前)を名指しで非難している話者を検出順に(重複無く)返す。exclude_agentの
+    発話は検出対象から除外する。
+
+    Args:
+        talk_history (list[Talk]): Talk history of the game / ゲームのトーク履歴
+        target_names_lower (list[str]): Lower-cased target names to detect
+            accusations against (may contain multiple targets) /
+            非難対象(小文字化済み)の名前リスト(複数可)
+        exclude_agent (str): Speaker to exclude from detection (usually self) /
+            検出から除外する話者(通常は自分自身)
+
+    Returns:
+        list[str]: Speakers accusing any target, in talk order, deduplicated /
+            対象のいずれかを非難した話者(発話順・重複無し)
+    """
+    attackers: list[str] = []
+    for talk in talk_history:
+        if talk.skip or not talk.text or talk.agent == exclude_agent:
+            continue
+        lowered = talk.text.lower()
+        is_attacking = any(name in lowered for name in target_names_lower) and any(
+            kw in lowered for kw in _ATTACK_GUIDE_ACCUSATION_KEYWORDS
+        )
+        if is_attacking and talk.agent not in attackers:
+            attackers.append(talk.agent)
+    return attackers
+
+
 def build_werewolf_attack_guide(
     talk_history: list[Talk],
     agent_name: str,
@@ -485,47 +596,15 @@ def build_werewolf_attack_guide(
         if claimant != agent_name and claimant not in likely_allies:
             likely_allies.append(claimant)
     # 自分を追及している相手(=敵)を攻撃している第三者も味方の可能性
-    my_name_lower = agent_name.lower()
-    my_attackers: list[str] = []
-    for talk in talk_history:
-        if talk.skip or not talk.text or talk.agent == agent_name:
-            continue
-        lowered = talk.text.lower()
-        is_attacking_me = my_name_lower in lowered and any(
-            kw in lowered
-            for kw in (
-                "wolf",
-                "werewolf",
-                "suspicious",
-                "liar",
-                "lying",
-                "fake",
-                "vote",
-            )
-        )
-        if is_attacking_me and talk.agent not in my_attackers:
-            my_attackers.append(talk.agent)
+    my_attackers = _detect_attackers_of(talk_history, [agent_name.lower()], agent_name)
     # 自分を攻撃している相手をさらに攻撃している第三者は味方の可能性
-    for talk in talk_history:
-        if talk.skip or not talk.text or talk.agent == agent_name:
-            continue
-        lowered = talk.text.lower()
-        for attacker in my_attackers:
-            attacker_lower = attacker.lower()
-            attacks_attacker = attacker_lower in lowered and any(
-                kw in lowered
-                for kw in (
-                    "wolf",
-                    "werewolf",
-                    "suspicious",
-                    "liar",
-                    "lying",
-                    "fake",
-                    "vote",
-                )
-            )
-            if attacks_attacker and talk.agent not in likely_allies and talk.agent != agent_name:
-                likely_allies.append(talk.agent)
+    for attacker in _detect_attackers_of(
+        talk_history,
+        [attacker.lower() for attacker in my_attackers],
+        agent_name,
+    ):
+        if attacker not in likely_allies:
+            likely_allies.append(attacker)
     if not likely_allies:
         return ""
     return texts.get().GROUNDING_WEREWOLF_ATTACK_GUIDE
@@ -581,6 +660,87 @@ def build_medium_guide(
     return "\n".join(lines)
 
 
+# 霊媒師を名乗る際に使われるキーワード群. 護衛ガイドの霊媒CO検出専用の定数
+_MEDIUM_CO_KEYWORDS = ("i am the medium", "i'm the medium", "medium result")
+
+
+def _detect_medium_claimants(talk_history: list[Talk], candidates: list[str]) -> list[str]:
+    """Return candidates (in talk order) who claim to be the Medium.
+
+    talk_historyを発話順に走査し, 霊媒師を名乗るキーワードを含む発話をした
+    candidates内の話者を検出順に(重複無く)返す。
+
+    Args:
+        talk_history (list[Talk]): Talk history / 発話履歴
+        candidates (list[str]): Guard candidates to restrict detection to /
+            護衛候補(この集合に含まれる話者のみを検出対象とする)
+
+    Returns:
+        list[str]: Medium claimants among candidates, in talk order /
+            candidates内の霊媒CO者(発話順)
+    """
+    claimants: list[str] = []
+    for talk in talk_history:
+        if talk.skip or not talk.text:
+            continue
+        lowered = talk.text.lower()
+        if (
+            any(kw in lowered for kw in _MEDIUM_CO_KEYWORDS)
+            and talk.agent in candidates
+            and talk.agent not in claimants
+        ):
+            claimants.append(talk.agent)
+    return claimants
+
+
+def _build_guard_priority(
+    confirmed_humans: list[str],
+    seer_claimants: list[str] | None,
+    medium_claimants: list[str],
+    candidates: list[str],
+) -> list[str]:
+    """Build the guard priority list: confirmed-white, Seer CO, Medium CO, rest.
+
+    護衛対象の優先順位リストを, 確定白 > 先制/対抗COした占い師 > 霊媒CO者 > 残りの
+    候補、の順で重複無く組み立てる(既存の優先順位ロジックをそのまま抽出したもの)。
+
+    Args:
+        confirmed_humans (list[str]): Own-confirmed human targets / 自分が確定させた人間
+        seer_claimants (list[str] | None): Seer CO claimants in order / 占い師CO者の順序
+        medium_claimants (list[str]): Medium CO claimants among candidates /
+            候補内の霊媒CO者
+        candidates (list[str]): Guard candidates (self and confirmed wolves
+            already excluded) / 護衛候補(自分と確定黒は除外済み)
+
+    Returns:
+        list[str]: Priority-ordered candidates / 優先順位付けされた候補リスト
+    """
+    priority: list[str] = []
+
+    # 1. 確定白(最優先 — 人狼が最も襲いたい確定村人)
+    for a in confirmed_humans:
+        if a in candidates and a not in priority:
+            priority.append(a)
+
+    # 2. 先制COした占い師(対抗COがいる場合は先制者が本物の可能性が高い)
+    if seer_claimants:
+        for c in seer_claimants:
+            if c in candidates and c not in priority:
+                priority.append(c)
+
+    # 3. 霊媒CO者
+    for m in medium_claimants:
+        if m not in priority:
+            priority.append(m)
+
+    # 4. 残りの候補
+    for a in candidates:
+        if a not in priority:
+            priority.append(a)
+
+    return priority
+
+
 def build_guard_guide(
     agent_name: str,
     alive: list[str],
@@ -613,32 +773,8 @@ def build_guard_guide(
 
     # 自分以外の生存者から護衛候補を優先度順に組み立てる
     candidates = [a for a in alive if a != agent_name and a not in confirmed_wolves]
-    priority: list[str] = []
-
-    # 1. 確定白(最優先 — 人狼が最も襲いたい確定村人)
-    for a in confirmed_humans:
-        if a in candidates and a not in priority:
-            priority.append(a)
-
-    # 2. 先制COした占い師(対抗COがいる場合は先制者が本物の可能性が高い)
-    if seer_claimants:
-        for c in seer_claimants:
-            if c in candidates and c not in priority:
-                priority.append(c)
-
-    # 3. 霊媒CO者
-    medium_keywords = ("i am the medium", "i'm the medium", "medium result")
-    for talk in talk_history:
-        if talk.skip or not talk.text:
-            continue
-        lowered = talk.text.lower()
-        if any(kw in lowered for kw in medium_keywords) and talk.agent in candidates and talk.agent not in priority:
-            priority.append(talk.agent)
-
-    # 4. 残りの候補
-    for a in candidates:
-        if a not in priority:
-            priority.append(a)
+    medium_claimants = _detect_medium_claimants(talk_history, candidates)
+    priority = _build_guard_priority(confirmed_humans, seer_claimants, medium_claimants, candidates)
 
     if not priority:
         return ""
